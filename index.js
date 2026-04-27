@@ -2,7 +2,8 @@ const express = require('express');
 const twilio = require('twilio');
 const Anthropic = require('@anthropic-ai/sdk');
 const { chromium } = require('playwright');
-const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -16,15 +17,7 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.GMAIL_ADDRESS,
-    pass: process.env.GMAIL_APP_PASSWORD
-  }
-});
+
 
 // Exact item names as they appear in the RD order guide Add buttons
 const ITEM_MAP = {
@@ -144,8 +137,8 @@ async function sendWhatsApp(to, message) {
 
 async function sendConfirmationEmail(orderItems, sender) {
   const orderList = orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
-  await transporter.sendMail({
-    from: process.env.GMAIL_ADDRESS,
+  await sgMail.send({
+    from: 'nicksodhi@gmail.com',
     to: 'nicksodhi@gmail.com',
     subject: `✅ Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
     text: `Items added to Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart`
