@@ -132,11 +132,11 @@ async function addItem(page, item) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
 
+  // Find best matching Add button
   const found = await page.evaluate((itemName) => {
     const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
     const priority = words.filter(w => w.length >= 6);
     let best = null, bestScore = 0;
-    
     for (const btn of document.querySelectorAll('button')) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
       if (!label) continue;
@@ -151,6 +151,7 @@ async function addItem(page, item) {
   if (!found) { console.log('  NOT FOUND'); return false; }
   console.log(`  Matched: ${found}`);
 
+  // Wait up to 8 seconds for modal
   let modalReady = false;
   for (let i = 0; i < 20; i++) {
     await page.waitForTimeout(400);
@@ -166,8 +167,6 @@ async function addItem(page, item) {
   }
   console.log(`  Modal: ${modalReady}`);
   if (!modalReady) { console.log('  Modal failed'); return false; }
-
-  await page.waitForTimeout(1000);
 
   if (modalReady === 'listbox') {
     const result = await page.evaluate((qty) => {
@@ -197,30 +196,22 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    // ===============================================
-    // BULLETPROOF FIX: Directly Type the Quantity
-    // ===============================================
-    let typedSuccess = false;
-    try {
-      // Find the hidden text box in the stepper
-      const qtyInput = await page.$('input[type="number"], input[inputmode="numeric"], input[aria-label*="quantity" i], input[aria-label*="Quantity" i]');
-      
-      if (qtyInput) {
-        // Force the input to exact quantity
-        await qtyInput.fill(String(item.quantity));
-        await qtyInput.dispatchEvent('change');
-        await page.keyboard.press('Tab'); // Forces website to register the update
-        await page.waitForTimeout(1000);
-        console.log(`  -> Typed exact quantity (${item.quantity}) directly into input box.`);
-        typedSuccess = true;
-      }
-    } catch (e) {
-      console.log('  -> Input box not found, falling back to manual clicking.');
+    // Stepper buttons
+    let currentQty = 1; 
+    const match = found.match(/(\d+)\s*ct/i) || found.match(/(\d+)\s*in cart/i);
+    if (match) {
+        currentQty = parseInt(match[1], 10);
     }
+    
+    let clicksNeeded = item.quantity - currentQty;
+    console.log(`  Target: ${item.quantity}, Current: ${currentQty}, Clicks needed: ${clicksNeeded}`);
 
-    // Fallback ONLY if typing fails
-    if (!typedSuccess) {
-      for (let i = 1; i < item.quantity; i++) {
+    // FIX: Wait a solid 1.5 seconds so the website's cart network requests finish.
+    // If we click '+' too fast, the website swallows the click entirely (which broke Mint).
+    await page.waitForTimeout(1500);
+
+    if (clicksNeeded > 0) {
+      for (let i = 0; i < clicksNeeded; i++) {
         const clicked = await page.evaluate((isSingle) => {
           const btns = Array.from(document.querySelectorAll('button'));
           const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
@@ -240,12 +231,35 @@ async function addItem(page, item) {
           if (plus.length >= 1) { plus[0].click(); return '+first'; }
           return 'none';
         }, isSingle);
-        console.log(`  [${i}/${item.quantity - 1} clicks] ${clicked}`);
+        console.log(`  [+ ${i+1}/${clicksNeeded}] ${clicked}`);
+        await page.waitForTimeout(800);
+      }
+    } else if (clicksNeeded < 0) {
+      const absClicks = Math.abs(clicksNeeded);
+      for (let i = 0; i < absClicks; i++) {
+        const clicked = await page.evaluate((isSingle) => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
+          if (!isSingle) {
+            const c = labeled.find(x => x.l.includes('decrement case') || x.l.includes('decrease case'));
+            if (c) { c.b.click(); return '-case'; }
+          }
+          const s = labeled.find(x => x.l.includes('decrement single') || x.l.includes('decrease single'));
+          if (s) { s.b.click(); return '-single'; }
+          const any = labeled.find(x => x.l.includes('decrement') || x.l.includes('decrease'));
+          if (any) { any.b.click(); return '-any'; }
+          const minus = btns.filter(b => b.textContent.trim() === '-');
+          if (!isSingle && minus.length >= 2) { minus[1].click(); return '-case'; }
+          if (minus.length >= 1) { minus[0].click(); return '-first'; }
+          return 'none';
+        }, isSingle);
+        console.log(`  [- ${i+1}/${absClicks}] ${clicked}`);
         await page.waitForTimeout(800);
       }
     }
   }
 
+  // Click confirm button
   await page.waitForTimeout(600);
   const confirmed = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
@@ -273,6 +287,7 @@ async function placeOrder(orderItems) {
   page.on('console', m => { if (m.text().startsWith('CART_BTNS:')) console.log('  BROWSER:', m.text()); });
 
   try {
+    // Login
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(5000);
     await page.waitForSelector('#email', { timeout: 30000 });
@@ -284,6 +299,7 @@ async function placeOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in');
 
+    // Clear cart
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
     for (let i = 0; i < 60; i++) {
@@ -303,6 +319,7 @@ async function placeOrder(orderItems) {
     }
     console.log('Cart cleared');
 
+    // Load order guide
     await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(6000);
     console.log('Order guide loaded');
