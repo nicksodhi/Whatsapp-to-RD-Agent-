@@ -17,12 +17,19 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
+// Added your specific case-to-single items here so Playwright always prefers the "Single" button for them
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
   'Taylor Farms - Bagged Cilantro',
   'Lemons, 71-115 ct',
   'Carrots- 10 lb',
+  'Peeled Garlic',
+  'White Cauliflower',
+  'MILK WHL GAL GS/AN',
+  "Chef's Quality - Liquid Butter Alternative - gallon",
+  "Chef's Quality - Lemon Juice - gallon",
+  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz"
 ];
 
 const ITEM_MAP = {
@@ -93,7 +100,7 @@ async function parseOrder(message) {
   
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-3-haiku-20240307',
       max_tokens: 1000,
       messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
 
@@ -103,10 +110,24 @@ ${itemMapStr}
 Rules:
 - IGNORE headers, dates, and employee names (e.g. "Sat, Apr 25 | Mohan", "RESTAURANT DEPOT")
 - ONLY add items explicitly listed with a quantity
-- Use EXACT quantity from order, never change it
 - Return ONLY a JSON array
 
-Format: [{"item": "exact name from map", "quantity": NUMBER}]
+IMPORTANT - QUANTITY CONVERSIONS:
+The chefs text their orders in "Cases", but our cart requires individual units ("Singles").
+If the chef orders any of the following items, you MUST MULTIPLY their requested quantity by the case size to get the final cart quantity:
+- Garlic: Multiply by 6 (e.g., "Garlic: 1" -> quantity 6)
+- Cauliflower: Multiply by 12 (e.g., "Cauliflower: 1" -> quantity 12)
+- Milk: Multiply by 4 (e.g., "Milk: 2" -> quantity 8)
+- Liquid Butter: Multiply by 3
+- Lemon Juice: Multiply by 4
+- Sambal: Multiply by 3
+
+EXCEPTION:
+- Mint: Always ordered in single 1lb bags. DO NOT multiply. (e.g., "Mint: 2" -> quantity 2)
+
+For all other items, use the exact quantity from the order.
+
+Format: [{"item": "exact name from map", "quantity": CALCULATED_NUMBER}]
 
 Order: ${message}` }]
     });
@@ -204,7 +225,6 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    // Context-Aware Stepper Logic: Guarantees it only clicks buttons belonging to this specific item
     const clicksNeeded = item.quantity - 1;
     console.log(`  Target: ${item.quantity}, Clicks needed: ${clicksNeeded}`);
 
@@ -229,7 +249,6 @@ async function addItem(page, item) {
             
             if (!isPlus) continue;
             
-            // Checks the text surrounding the button to ensure it matches the correct item box
             let parent = b;
             for(let j=0; j<8; j++) {
               if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
@@ -289,7 +308,6 @@ async function placeOrder(orderItems) {
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
     
-    // Restored robust cart clearer that handles SVG trash buttons
     for (let i = 0; i < 60; i++) {
       const removed = await page.evaluate(() => {
         const els = Array.from(document.querySelectorAll('button, a, [role="button"]')).reverse();
