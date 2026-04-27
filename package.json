@@ -1,0 +1,17 @@
+{
+  "name": "naan-curry-agent",
+  "version": "1.0.0",
+  "description": "WhatsApp ordering agent for Naan & Curry - Restaurant Depot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "install-browsers": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "twilio": "^4.19.0",
+    "@anthropic-ai/sdk": "^0.20.0",
+    "playwright": "^1.40.0",
+    "nodemailer": "^6.9.7"
+  }
+}
