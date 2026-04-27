@@ -205,18 +205,21 @@ async function placeRestaurantDepotOrder(orderItems) {
         console.log(`Clicked: ${result.label}`);
         await page.waitForTimeout(2000);
 
-        // Click + for additional quantities
-        for (let i = 1; i < item.quantity; i++) {
+        // Click + for additional quantities (Add button already added 1, so click + qty-1 more times)
+        const extraClicks = item.quantity - 1;
+        for (let i = 0; i < extraClicks; i++) {
           await page.evaluate(() => {
             const btns = Array.from(document.querySelectorAll('button'));
-            const plusBtn = btns.find(b =>
-              b.getAttribute('aria-label')?.toLowerCase().includes('increase') ||
-              b.getAttribute('aria-label')?.toLowerCase().includes('increment') ||
-              b.textContent.trim() === '+'
-            );
+            // Look for the increase/increment button that appears after clicking Add
+            const plusBtn = btns.find(b => {
+              const label = (b.getAttribute('aria-label') || '').toLowerCase();
+              const text = b.textContent.trim();
+              return label.includes('increase') || label.includes('increment') || 
+                     (text === '+' && b.closest('[class*="stepper"], [class*="quantity"], [class*="counter"]'));
+            });
             if (plusBtn) plusBtn.click();
           });
-          await page.waitForTimeout(400);
+          await page.waitForTimeout(600);
         }
       } else {
         console.log(`Not found: ${item.item}, searched: ${JSON.stringify(result.searched)}`);
