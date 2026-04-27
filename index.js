@@ -17,7 +17,9 @@ const AUTHORIZED_NUMBERS = [
 ];
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.GMAIL_ADDRESS,
     pass: process.env.GMAIL_APP_PASSWORD
@@ -144,7 +146,7 @@ async function sendConfirmationEmail(orderItems, sender) {
   const orderList = orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
   await transporter.sendMail({
     from: process.env.GMAIL_ADDRESS,
-    to: [process.env.YOUR_EMAIL, process.env.RAHUL_EMAIL].join(','),
+    to: 'nicksodhi@gmail.com',
     subject: `✅ Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
     text: `Items added to Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart`
   });
