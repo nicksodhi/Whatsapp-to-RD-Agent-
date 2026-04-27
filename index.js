@@ -170,6 +170,18 @@ async function placeRestaurantDepotOrder(orderItems) {
     });
     await page.waitForTimeout(5000);
 
+    // Dismiss any popups/modals that might be blocking
+    try {
+      const closeBtn = await page.$('button[aria-label*="Close"], button[aria-label*="close"], .modal-close, [data-dialog-ref] button');
+      if (closeBtn) {
+        await closeBtn.click();
+        await page.waitForTimeout(1000);
+      }
+      // Press Escape to close any open dialogs
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
+    } catch(e) { /* no popup */ }
+
     // Get all Add buttons and their labels
     const buttons = await page.$$('button[aria-label*="Add"]');
     const buttonMap = [];
@@ -257,7 +269,7 @@ app.post('/whatsapp', async (req, res) => {
     const result = await placeRestaurantDepotOrder(parsedOrder);
 
     if (result.success) {
-      await sendWhatsApp(fromNumber, `🎉 Items added to your cart!\n\nCheckout here and select Pickup:\nhttps://member.restaurantdepot.com/store/business/cart\n\nEmail confirmation sent to you and Rahul.`);
+      await sendWhatsApp(fromNumber, `🎉 Items added to cart! Select Pickup at checkout:\nmember.restaurantdepot.com/store/business/cart`);
       await sendConfirmationEmail(parsedOrder, senderName);
     } else {
       await sendWhatsApp(fromNumber, `⚠️ Issue adding items.\n\nError: ${result.error}\n\nOrder manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
