@@ -17,7 +17,6 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-// Added Heavy Cream and Mixed Veggies to the strict single-click list
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
@@ -34,7 +33,7 @@ const SINGLE_ONLY_ITEMS = [
   "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs"
 ];
 
-// Added Heavy Cream (6) and Mixed Veggies (12) to the JS math dictionary
+// BULLETPROOF FIX: Case math stays strictly in Javascript
 const CASE_CONVERSIONS = {
   "Peeled Garlic": 6,
   "White Cauliflower": 12,
@@ -171,8 +170,9 @@ async function addItem(page, item) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
 
-  const found = await page.evaluate((itemName) => {
-    const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
+  const btnHandle = await page.evaluateHandle((itemName) => {
+    // FIX: Reduced length filter to 3 so words like "Red", "Mix", and "Oil" are matched perfectly
+    const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 3 && !['lbs', 'pkg', 'for', 'the', 'and'].includes(w));
     const priority = words.filter(w => w.length >= 6);
     let best = null, bestScore = 0;
     for (const btn of document.querySelectorAll('button')) {
@@ -182,12 +182,18 @@ async function addItem(page, item) {
       const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
       if (score > bestScore) { bestScore = score; best = btn; }
     }
-    if (best && bestScore > 0) { best.click(); return best.getAttribute('aria-label') || best.textContent.trim(); }
-    return null;
+    return best;
   }, item.item);
 
-  if (!found) { console.log('  NOT FOUND'); return false; }
-  console.log(`  Matched initial button: ${found}`);
+  const isBtnValid = await page.evaluate(el => el !== null, btnHandle);
+  if (!isBtnValid) { console.log('  NOT FOUND'); return false; }
+  
+  const matchedLabel = await page.evaluate(el => el.getAttribute('aria-label') || el.textContent.trim(), btnHandle);
+  console.log(`  Matched initial button: ${matchedLabel}`);
+  
+  // NATIVE Playwright click guarantees the button is actually interactable
+  await btnHandle.click();
+  await btnHandle.dispose();
 
   let modalReady = false;
   for (let i = 0; i < 20; i++) {
@@ -205,9 +211,7 @@ async function addItem(page, item) {
   
   if (!modalReady) { console.log('  Modal failed'); return false; }
 
-  // THE FIX: Increased wait to a full 3 seconds.
-  // This guarantees the DOM is unlocked and ready to accept the first "+" click.
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(1500);
 
   if (modalReady === 'listbox') {
     const result = await page.evaluate((qty) => {
@@ -241,46 +245,63 @@ async function addItem(page, item) {
 
     if (clicksNeeded > 0) {
       for (let i = 0; i < clicksNeeded; i++) {
-        const clicked = await page.evaluate(({itemName, isSingle}) => {
-          const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
-          const btns = Array.from(document.querySelectorAll('button'));
-          
-          let bestBtn = null;
-          let bestScore = -1;
-          
-          for (const b of btns) {
-            const txt = (b.textContent || '').trim().toLowerCase();
-            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-            
-            let isPlus = false;
-            if (!isSingle && (aria.includes('increment case') || aria.includes('increase case'))) isPlus = true;
-            else if (aria.includes('increment single') || aria.includes('increase single')) isPlus = true;
-            else if (aria.includes('increment') || aria.includes('increase')) isPlus = true;
-            else if (txt === '+') isPlus = true;
-            
-            if (!isPlus) continue;
-            
-            let parent = b;
-            for(let j=0; j<6; j++) {
-              if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
-            }
-            const containerText = (parent.innerText || '').toLowerCase();
-            const score = words.filter(w => containerText.includes(w)).length;
-            
-            if (score > bestScore && score > 0) { 
-                bestScore = score; 
-                bestBtn = b; 
-            }
-          }
-          
-          if (bestBtn) { bestBtn.click(); return 'scoped +'; }
-          return 'none';
-        }, { itemName: item.item, isSingle });
         
-        console.log(`  [+ ${i+1}/${clicksNeeded}] ${clicked}`);
+        let clickSuccess = false;
+        let retries = 0;
         
-        // Increased breathing room between clicks
-        await page.waitForTimeout(1200);
+        // FIX: The Smart Retry Loop. Checks if the button is disabled by the network loader.
+        while (!clickSuccess && retries < 15) {
+            const status = await page.evaluate(({itemName, isSingle}) => {
+                const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 3 && !['lbs', 'pkg', 'for', 'the', 'and'].includes(w));
+                const btns = Array.from(document.querySelectorAll('button'));
+                let bestBtn = null, bestScore = -1;
+
+                for (const b of btns) {
+                    const txt = (b.textContent || '').trim().toLowerCase();
+                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+
+                    let isPlus = false;
+                    if (!isSingle && (aria.includes('increment case') || aria.includes('increase case'))) isPlus = true;
+                    else if (aria.includes('increment single') || aria.includes('increase single')) isPlus = true;
+                    else if (aria.includes('increment') || aria.includes('increase')) isPlus = true;
+                    else if (txt === '+') isPlus = true;
+
+                    if (!isPlus) continue;
+
+                    let parent = b;
+                    for(let j=0; j<6; j++) {
+                        if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
+                    }
+                    const containerText = (parent.innerText || '').toLowerCase();
+                    const score = words.filter(w => containerText.includes(w)).length;
+
+                    if (score > bestScore && score > 0) { bestScore = score; bestBtn = b; }
+                }
+
+                if (!bestBtn) return 'not_found';
+                
+                // Stops the bot from dropping clicks when the website is locking the cart
+                if (bestBtn.disabled || bestBtn.hasAttribute('disabled') || bestBtn.closest('[disabled]') || bestBtn.getAttribute('aria-disabled') === 'true') {
+                    return 'disabled';
+                }
+
+                bestBtn.click();
+                return 'clicked';
+            }, { itemName: item.item, isSingle });
+
+            if (status === 'clicked') {
+                clickSuccess = true;
+                console.log(`  [+ ${i+1}/${clicksNeeded}] Clicked successfully`);
+            } else if (status === 'disabled') {
+                console.log(`  [+ ${i+1}/${clicksNeeded}] Button loading... waiting 400ms`);
+                await page.waitForTimeout(400);
+                retries++;
+            } else {
+                console.log(`  [+ ${i+1}/${clicksNeeded}] Failed to locate + button`);
+                break;
+            }
+        }
+        await page.waitForTimeout(800); 
       }
     }
   }
