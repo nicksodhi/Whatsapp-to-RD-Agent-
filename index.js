@@ -226,12 +226,20 @@ async function placeRestaurantDepotOrder(orderItems) {
           await page.waitForTimeout(600);
         }
 
-        // Step 3: Click "Add X items to cart" button to confirm
+        // Step 3: Click "Add X items to cart" button inside the modal
+        // Must skip "Add 48 items to cart" (whole order guide button) and find the modal one
         await page.waitForTimeout(500);
         await page.evaluate(() => {
           const btns = Array.from(document.querySelectorAll('button'));
-          const addToCart = btns.find(b => b.textContent.includes('Add') && b.textContent.includes('items to cart'));
-          if (addToCart) addToCart.click();
+          // Filter buttons that have "items to cart" but NOT "48 items" (that's the order guide button)
+          const addToCart = btns.find(b => {
+            const text = b.textContent.trim();
+            return text.includes('items to cart') && !text.includes('48 items to cart');
+          });
+          if (addToCart) {
+            console.log('Clicking:', addToCart.textContent.trim());
+            addToCart.click();
+          }
         });
         await page.waitForTimeout(2000);
         console.log(`Added ${item.quantity} case(s) of ${item.item} to cart`);
