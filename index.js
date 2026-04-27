@@ -43,7 +43,7 @@ const ITEM_MAP = {
   "chicken leg quarters": "Fresh Chicken Leg Quarters - 40 lbs",
   "chicken wings": "Jumbo Chicken Party Wings (6-8 ct)",
   "wings": "Jumbo Chicken Party Wings (6-8 ct)",
-  "chicken leg meat": "Frozen Boneless, Skinless Chicken Leg Meat, Marinated - 40 lbs",
+  "chicken leg meat": "Frozen Boneless Skinless Chicken Leg Meat - 40 lbs",
   "lamb": "Frozen Halal Boneless Lamb Leg, Australia",
   "lamb leg": "Frozen Halal Boneless Lamb Leg, Australia",
   "goat": "Thomas Farms - Bone in Goat Cube - #15",
@@ -57,10 +57,13 @@ const ITEM_MAP = {
   "frozen 4-way mix": "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs",
   "frozen mix": "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs",
   "4-way mix": "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs",
+  "cauliflower": "White Cauliflower",
+  "carrots": "Carrots- 10 lb",
+  "lemon juice": "Chef's Quality - Lemon Juice - gallon",
   "roti atta": "Golden Temple - Durum Atta Flour - 2/20 lb Bag",
   "atta": "Golden Temple - Durum Atta Flour - 2/20 lb Bag",
-  "all purpose flour": "Golden Temple - Durum Atta Flour - 2/20 lb Bag",
-  "flour": "Golden Temple - Durum Atta Flour - 2/20 lb Bag",
+  "all purpose flour": "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
+  "flour": "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
   "baking powder": "Clabber Girl - Baking Powder - 5 lbs",
   "corn starch": "Clabber Girl Cornstarch - 3 lbs",
   "cornstarch": "Clabber Girl Cornstarch - 3 lbs",
@@ -107,12 +110,13 @@ Use this item mapping to convert the order to exact Restaurant Depot item names:
 ${itemMapStr}
 
 Rules:
-- ONLY add items that are EXPLICITLY listed in the order with a quantity number
+- ONLY add items EXPLICITLY listed in the order with a quantity
 - Match each item to the closest key in the map above
-- The quantity in the order = number of cases/units to add to cart
-- If an item is NOT in the order, do NOT add it - even if it seems related
-- Skip items not in the map (Cauliflower, Carrots, Lemon, Mint, Lemon Juice, Ketchup, Vinegar, Coca-Cola, Fanta, Indian spices, disposables)
-- NEVER add Lamb, Goat, Cheese, Diet Coke, Cilantro, Spinach, Broccoli, or Red Food Coloring unless explicitly in the order
+- The quantity number in the order = EXACT number to add to cart (do not change it)
+- If quantity is 2, add 2. If quantity is 4, add 4. Never round down.
+- If an item is NOT in the order message, do NOT add it under any circumstances
+- Skip: Mint, Lemon (the fruit), Ketchup, Vinegar, Coca-Cola, Fanta, Indian spices, disposables, cleaning supplies
+- NEVER add Lamb, Goat, Cheese, Diet Coke, Cilantro, Spinach, Broccoli, Red Food Coloring unless explicitly ordered
 - Return ONLY a JSON array, no markdown, no explanation
 
 Format: [{"item": "EXACT item name from map values", "quantity": NUMBER}]
