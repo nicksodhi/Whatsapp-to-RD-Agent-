@@ -31,23 +31,32 @@ async function parseOrder(message) {
     messages: [{
       role: 'user',
       content: `You are a restaurant ordering assistant for Naan & Curry, an Indian fast-casual restaurant in Las Vegas.
-      
-Parse this WhatsApp message into a structured order list.
+
+Parse this WhatsApp message into a structured order list. The person may text in any casual format.
+
+Examples of valid orders:
+- "order 6 yellow onions" -> [{"item": "yellow onions", "quantity": "6", "unit": "each"}]
+- "10 lbs chicken tikka" -> [{"item": "chicken tikka", "quantity": "10", "unit": "lbs"}]
+- "need 2 cases naan and 5 lbs paneer" -> [{"item": "naan", "quantity": "2", "unit": "cases"}, {"item": "paneer", "quantity": "5", "unit": "lbs"}]
+- "get me some onions and chicken" -> [{"item": "onions", "quantity": "1", "unit": "each"}, {"item": "chicken", "quantity": "1", "unit": "each"}]
+
+Rules:
+- If no unit is mentioned, use "each" for countable items and "lbs" for meat/produce by weight
+- If no quantity is mentioned, use "1"
+- Always return a valid JSON array, never return an error unless the message is completely unrelated to food ordering
+- The message does NOT need to start with "order"
+
 Message: "${message}"
 
-Return ONLY a JSON array like this, nothing else:
-[
-  {"item": "chicken tikka", "quantity": "10", "unit": "lbs"},
-  {"item": "paneer", "quantity": "5", "unit": "lbs"}
-]
-
-If the message is not an order, return: {"error": "not an order"}`
+Return ONLY a JSON array, no explanation, no markdown, just the array.`
     }]
   });
 
   const text = response.content[0].text.trim();
   try {
-    return JSON.parse(text);
+    // Strip any markdown just in case
+    const clean = text.replace(/```json|```/g, '').trim();
+    return JSON.parse(clean);
   } catch {
     return { error: 'Could not parse order' };
   }
@@ -80,14 +89,12 @@ async function placeRestaurantDepotOrder(orderItems) {
   const page = await browser.newPage();
   
   try {
-    // Go straight to login page
     console.log('Navigating to Restaurant Depot login...');
     await page.goto('https://www.restaurantdepot.com/login', { 
       waitUntil: 'domcontentloaded', 
       timeout: 30000 
     });
     
-    // Wait for JS to render the form
     await page.waitForTimeout(5000);
     console.log('Page loaded, waiting for email field...');
 
@@ -102,7 +109,6 @@ async function placeRestaurantDepotOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in successfully');
 
-    // Go to Order Guide
     console.log('Going to Order Guide...');
     await page.goto('https://www.restaurantdepot.com/order-guide', { 
       waitUntil: 'domcontentloaded',
@@ -110,7 +116,6 @@ async function placeRestaurantDepotOrder(orderItems) {
     });
     await page.waitForTimeout(4000);
 
-    // Search and add each item
     for (const item of orderItems) {
       console.log(`Adding: ${item.quantity} ${item.unit} of ${item.item}`);
       try {
@@ -129,7 +134,6 @@ async function placeRestaurantDepotOrder(orderItems) {
       }
     }
 
-    // Place order
     console.log('Placing order...');
     const orderBtn = await page.$('button:has-text("Add to Cart"), button:has-text("Place Order"), .add-to-cart, #place-order');
     if (orderBtn) {
@@ -162,26 +166,26 @@ app.post('/whatsapp', async (req, res) => {
     return;
   }
 
-  await sendWhatsApp(fromNumber, `✅ Got your order ${senderName}! Give me a few minutes to place it on Restaurant Depot...`);
+  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Placing your order on Restaurant Depot now...`);
 
   try {
     const parsedOrder = await parseOrder(incomingMsg);
 
     if (parsedOrder.error) {
-      await sendWhatsApp(fromNumber, `❓ I couldn't understand that as an order. Try something like:\n\n"Order 10 lbs chicken tikka, 5 lbs paneer, 3 cases naan"`);
+      await sendWhatsApp(fromNumber, `❓ I couldn't understand that. Try something like:\n\n"6 yellow onions, 10 lbs chicken tikka, 2 cases naan"`);
       return;
     }
 
     const orderSummary = parsedOrder.map(i => `• ${i.quantity} ${i.unit} - ${i.item}`).join('\n');
-    await sendWhatsApp(fromNumber, `📋 I understood your order as:\n\n${orderSummary}\n\nPlacing it now...`);
+    await sendWhatsApp(fromNumber, `📋 Order understood:\n\n${orderSummary}\n\nLogging into Restaurant Depot...`);
 
     const result = await placeRestaurantDepotOrder(parsedOrder);
 
     if (result.success) {
-      await sendWhatsApp(fromNumber, `🎉 Order placed successfully on Restaurant Depot!\n\nA confirmation email has been sent to you and Rahul.`);
+      await sendWhatsApp(fromNumber, `🎉 Order placed on Restaurant Depot!\n\nConfirmation email sent to you and Rahul.`);
       await sendConfirmationEmail(parsedOrder, senderName);
     } else {
-      await sendWhatsApp(fromNumber, `⚠️ There was an issue placing the order automatically. Please log in to Restaurant Depot and place it manually.\n\nError: ${result.error}`);
+      await sendWhatsApp(fromNumber, `⚠️ Couldn't place automatically. Please log into Restaurant Depot manually.\n\nError: ${result.error}`);
     }
 
   } catch (error) {
