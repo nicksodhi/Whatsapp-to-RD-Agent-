@@ -138,8 +138,7 @@ async function addItem(page, item) {
     const priority = words.filter(w => w.length >= 6);
     let best = null, bestScore = 0;
     
-    // TWEAK: Look at ALL buttons, not just ones with "Add" in the label. 
-    // This allows it to click buttons that say "1 ct" or "3 ct" instead of "+ Add"
+    // TWEAK: Looks at ALL buttons to catch existing cart items (like "3 ct")
     for (const btn of document.querySelectorAll('button')) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
       if (!label) continue;
@@ -147,7 +146,7 @@ async function addItem(page, item) {
       const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
       if (score > bestScore) { bestScore = score; best = btn; }
     }
-    if (best && bestScore > 0) { best.click(); return best.getAttribute('aria-label') || best.textContent; }
+    if (best && bestScore > 0) { best.click(); return best.getAttribute('aria-label') || best.textContent.trim(); }
     return null;
   }, item.item);
 
@@ -201,28 +200,62 @@ async function addItem(page, item) {
 
   } else {
     // Stepper buttons
-    for (let i = 0; i < item.quantity; i++) {
-      const clicked = await page.evaluate((isSingle) => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
-        if (!isSingle) {
-          const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
-          if (c) { c.b.click(); return 'case'; }
-        }
-        const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
-        if (s) { s.b.click(); return 'single'; }
-        const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
-        if (any) {
-          if (isSingle) { any.b.click(); return 'any-single'; }
-          any.b.click(); return 'any';
-        }
-        const plus = btns.filter(b => b.textContent.trim() === '+');
-        if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
-        if (plus.length >= 1) { plus[0].click(); return '+first'; }
-        return 'none';
-      }, isSingle);
-      console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
-      await page.waitForTimeout(600);
+    // TWEAK 2: Read current quantity from the button text to avoid adding on top of old quantities
+    let currentQty = 1; 
+    const match = found.match(/(\d+)\s*ct/i) || found.match(/(\d+)\s*in cart/i);
+    if (match) {
+        currentQty = parseInt(match[1], 10);
+    }
+    
+    let clicksNeeded = item.quantity - currentQty;
+    console.log(`  Target: ${item.quantity}, Current: ${currentQty}, Clicks needed: ${clicksNeeded}`);
+
+    if (clicksNeeded > 0) {
+      for (let i = 0; i < clicksNeeded; i++) {
+        const clicked = await page.evaluate((isSingle) => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
+          if (!isSingle) {
+            const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
+            if (c) { c.b.click(); return 'case'; }
+          }
+          const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
+          if (s) { s.b.click(); return 'single'; }
+          const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
+          if (any) {
+            if (isSingle) { any.b.click(); return 'any-single'; }
+            any.b.click(); return 'any';
+          }
+          const plus = btns.filter(b => b.textContent.trim() === '+');
+          if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
+          if (plus.length >= 1) { plus[0].click(); return '+first'; }
+          return 'none';
+        }, isSingle);
+        console.log(`  [+ ${i+1}/${clicksNeeded}] ${clicked}`);
+        await page.waitForTimeout(600);
+      }
+    } else if (clicksNeeded < 0) {
+      const absClicks = Math.abs(clicksNeeded);
+      for (let i = 0; i < absClicks; i++) {
+        const clicked = await page.evaluate((isSingle) => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
+          if (!isSingle) {
+            const c = labeled.find(x => x.l.includes('decrement case') || x.l.includes('decrease case'));
+            if (c) { c.b.click(); return '-case'; }
+          }
+          const s = labeled.find(x => x.l.includes('decrement single') || x.l.includes('decrease single'));
+          if (s) { s.b.click(); return '-single'; }
+          const any = labeled.find(x => x.l.includes('decrement') || x.l.includes('decrease'));
+          if (any) { any.b.click(); return '-any'; }
+          const minus = btns.filter(b => b.textContent.trim() === '-');
+          if (!isSingle && minus.length >= 2) { minus[1].click(); return '-case'; }
+          if (minus.length >= 1) { minus[0].click(); return '-first'; }
+          return 'none';
+        }, isSingle);
+        console.log(`  [- ${i+1}/${absClicks}] ${clicked}`);
+        await page.waitForTimeout(600);
+      }
     }
   }
 
@@ -230,18 +263,14 @@ async function addItem(page, item) {
   await page.waitForTimeout(600);
   const confirmed = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
-    // Log all cart-related buttons
     const cartBtns = btns.filter(b => /to cart|update/i.test(b.textContent));
     console.log('CART_BTNS:' + cartBtns.map(b => b.textContent.trim()).join('|'));
-    // Prefer button with count 1-49
     for (const b of cartBtns) {
       const m = b.textContent.match(/Add (\d+)/i);
       if (m && +m[1] > 0 && +m[1] < 50) { b.click(); return b.textContent.trim(); }
     }
-    // Plain "Add to cart"
     const plain = btns.find(b => /^add to cart$/i.test(b.textContent.trim()));
     if (plain) { plain.click(); return 'Add to cart'; }
-    // Update
     const upd = btns.find(b => /update/i.test(b.textContent));
     if (upd) { upd.click(); return upd.textContent.trim(); }
     return null;
@@ -276,7 +305,13 @@ async function placeOrder(orderItems) {
     for (let i = 0; i < 60; i++) {
       const removed = await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
-        const removeBtn = btns.find(b => b.textContent.trim() === 'Remove' || (b.getAttribute('aria-label') || '').includes('Remove'));
+        // TWEAK 1: Look for the new SVG trash icons, not just the word "Remove"
+        const removeBtn = btns.find(b => {
+          const txt = b.textContent.trim().toLowerCase();
+          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+          const html = b.innerHTML.toLowerCase();
+          return txt === 'remove' || txt === 'delete' || aria.includes('remove') || aria.includes('delete') || html.includes('trash');
+        });
         if (removeBtn) { removeBtn.click(); return true; }
         return false;
       });
