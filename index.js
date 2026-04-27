@@ -109,7 +109,7 @@ async function parseOrder(message) {
   
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001', // Restored your working model!
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 1000,
       messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
 
@@ -162,7 +162,7 @@ async function sendEmail(orderItems, sender) {
 
 async function addItem(page, item) {
   const isSingle = SINGLE_ONLY_ITEMS.includes(item.item);
-  console.log(`\n[${item.item}] qty=${item.quantity} single=${isSingle}`);
+  console.log(`\n[${item.item}] targetQty=${item.quantity} single=${isSingle}`);
 
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
@@ -183,7 +183,7 @@ async function addItem(page, item) {
   }, item.item);
 
   if (!found) { console.log('  NOT FOUND'); return false; }
-  console.log(`  Matched: ${found}`);
+  console.log(`  Matched initial button: ${found}`);
 
   let modalReady = false;
   for (let i = 0; i < 20; i++) {
@@ -201,7 +201,7 @@ async function addItem(page, item) {
   
   if (!modalReady) { console.log('  Modal failed'); return false; }
 
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1000);
 
   if (modalReady === 'listbox') {
     const result = await page.evaluate((qty) => {
@@ -230,47 +230,103 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    const clicksNeeded = item.quantity - 1;
-    console.log(`  Target: ${item.quantity}, Clicks needed: ${clicksNeeded}`);
-
-    if (clicksNeeded > 0) {
-      for (let i = 0; i < clicksNeeded; i++) {
-        const clicked = await page.evaluate(({itemName, isSingle}) => {
-          const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
-          const btns = Array.from(document.querySelectorAll('button'));
-          
-          let bestBtn = null;
-          let bestScore = -1;
-          
-          for (const b of btns) {
-            const txt = b.textContent.trim().toLowerCase();
-            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-            
-            let isPlus = false;
-            if (!isSingle && (aria.includes('increment case') || aria.includes('increase case'))) isPlus = true;
-            else if (aria.includes('increment single') || aria.includes('increase single')) isPlus = true;
-            else if (aria.includes('increment') || aria.includes('increase')) isPlus = true;
-            else if (txt === '+') isPlus = true;
-            
-            if (!isPlus) continue;
-            
-            let parent = b;
-            for(let j=0; j<8; j++) {
-              if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
-            }
-            const containerText = (parent.innerText || '').toLowerCase();
-            const score = words.filter(w => containerText.includes(w)).length;
-            
-            if (score > bestScore) { bestScore = score; bestBtn = b; }
-          }
-          
-          if (bestBtn) { bestBtn.click(); return 'scoped +'; }
-          return 'none';
-        }, { itemName: item.item, isSingle });
+    // THE BULLETPROOF VISUAL FEEDBACK LOOP
+    let attempts = 0;
+    while(attempts < 35) {
+        attempts++;
+        await page.waitForTimeout(1200); // 1.2s wait guarantees we read the updated cart state
         
-        console.log(`  [+ ${i+1}/${clicksNeeded}] ${clicked}`);
-        await page.waitForTimeout(800);
-      }
+        const state = await page.evaluate(({itemName, targetQty, isSingle}) => {
+            const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
+            const btns = Array.from(document.querySelectorAll('button')).reverse(); 
+            
+            let bestBtn = null;
+            let bestScore = -1;
+            let container = null;
+            
+            // 1. Locate the specific item container and its + button
+            for (const b of btns) {
+                const txt = (b.textContent || '').trim().toLowerCase();
+                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                
+                let isPlus = false;
+                if (!isSingle && (aria.includes('increment case') || aria.includes('increase case'))) isPlus = true;
+                else if (aria.includes('increment single') || aria.includes('increase single')) isPlus = true;
+                else if (aria.includes('increment') || aria.includes('increase')) isPlus = true;
+                else if (txt === '+') isPlus = true;
+                
+                if (!isPlus) continue;
+                
+                let parent = b;
+                for(let j=0; j<8; j++) {
+                    if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
+                }
+                const containerText = (parent.innerText || '').toLowerCase();
+                const score = words.filter(w => containerText.includes(w)).length;
+                
+                if (score > bestScore) { 
+                    bestScore = score; 
+                    bestBtn = b; 
+                    container = parent;
+                }
+            }
+            
+            if (!bestBtn || !container) return { status: 'waiting_for_ui', qty: -1 };
+            
+            // 2. Visually extract the current quantity displayed on the screen
+            let currentQty = 1; 
+            let foundQty = null;
+            
+            const input = container.querySelector('input[type="number"], input[inputmode="numeric"]');
+            if(input && input.value) {
+                foundQty = parseInt(input.value, 10);
+            }
+            
+            if(foundQty === null) {
+                const siblings = Array.from(bestBtn.parentElement.children);
+                for(const sib of siblings) {
+                    if(sib.tagName !== 'BUTTON') {
+                        const txt = (sib.innerText || sib.textContent || '').trim();
+                        const m = txt.match(/^(\d+)\s*ct$/i) || txt.match(/^(\d+)$/i);
+                        if(m) { foundQty = parseInt(m[1], 10); break; }
+                    }
+                }
+            }
+            
+            if(foundQty === null) {
+                const leafs = Array.from(container.querySelectorAll('*')).filter(el => el.children.length === 0).reverse();
+                for(const el of leafs) {
+                    const txt = (el.innerText || el.textContent || '').trim();
+                    const m = txt.match(/^(\d+)\s*ct$/i);
+                    if(m) { foundQty = parseInt(m[1], 10); break; }
+                }
+            }
+            
+            if(foundQty !== null) currentQty = foundQty;
+            
+            // 3. React to what we see
+            if(currentQty === targetQty) return { status: 'done', qty: currentQty };
+            
+            if(currentQty < targetQty) {
+                bestBtn.click();
+                return { status: 'clicked_plus', qty: currentQty };
+            } else {
+                const minusBtns = Array.from(container.querySelectorAll('button')).filter(b => {
+                    const txt = (b.textContent||'').trim();
+                    const aria = (b.getAttribute('aria-label')||'').toLowerCase();
+                    return txt === '-' || aria.includes('decrease');
+                });
+                if(minusBtns.length > 0) {
+                    minusBtns[0].click();
+                    return { status: 'clicked_minus', qty: currentQty };
+                }
+                return { status: 'overshot_no_minus_found', qty: currentQty };
+            }
+            
+        }, { itemName: item.item, targetQty: item.quantity, isSingle });
+        
+        console.log(`  [Stepper Check ${attempts}] UI Qty: ${state.qty} -> Target: ${item.quantity} | Action: ${state.status}`);
+        if(state.status === 'done') break;
     }
   }
 
@@ -384,4 +440,4 @@ app.post('/whatsapp', async (req, res) => {
 });
 
 app.get('/', (req, res) => res.send('Naan & Curry Agent 🍛'));
-app.listen(process.env.PORT || 3000, () => console.log('Running'));
+app.listen(process.env.PORT || 8080, () => console.log('Running'));
