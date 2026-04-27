@@ -100,14 +100,12 @@ async function placeRestaurantDepotOrder(orderItems) {
 
     // Login
     console.log('Logging in...');
-    await page.click('[data-testid="login"], a[href*="login"], .login-link, #login').catch(() =>
-      page.goto('https://www.restaurantdepot.com/login')
-    );
+    await page.goto('https://www.restaurantdepot.com/login', { waitUntil: 'networkidle' });
     
-    await page.waitForSelector('input[type="email"], input[name="email"], #email', { timeout: 10000 });
-    await page.fill('input[type="email"], input[name="email"], #email', process.env.RD_EMAIL);
-    await page.fill('input[type="password"], input[name="password"], #password', process.env.RD_PASSWORD);
-    await page.click('button[type="submit"], .login-btn, #login-submit');
+    await page.waitForSelector('#email', { timeout: 10000 });
+    await page.fill('#email', process.env.RD_EMAIL);
+    await page.fill('input[type="password"]', process.env.RD_PASSWORD);
+    await page.click('button[type="submit"]');
     
     await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 15000 });
     console.log('Logged in successfully');
