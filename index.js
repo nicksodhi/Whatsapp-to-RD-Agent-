@@ -17,8 +17,6 @@ process.env.YOUR_WHATSAPP_NUMBER,
 process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-// Items that should be ordered as singles (not cases)
-// These use the single increment button or the single dropdown
 const SINGLE_ONLY_ITEMS = [
 ‘Herb - Mint- 1lb’,
 ‘Micro Orchid Flowers - 4 oz’,
@@ -30,7 +28,7 @@ const SINGLE_ONLY_ITEMS = [
 const ITEM_MAP = {
 “yellow onions”: “Jumbo Spanish Onions - 50 lbs”,
 “red onions”: “Jumbo Red Onions - 25 lbs”,
-“potato”: “Potato - 50 lb”, // Item 42725
+“potato”: “Potato - 50 lb”,
 “potatoes”: “Potato - 50 lb”,
 “garlic”: “Peeled Garlic”,
 “ginger”: “Fresh Ginger - 30 lbs”,
@@ -91,356 +89,252 @@ const ITEM_MAP = {
 };
 
 async function parseOrder(message) {
-const itemMapStr = Object.entries(ITEM_MAP)
-.map(([k, v]) => `"${k}" → "${v}"`)
-.join(’\n’);
-
+const itemMapStr = Object.entries(ITEM_MAP).map(([k,v]) => `"${k}" -> "${v}"`).join(’\n’);
 const response = await anthropic.messages.create({
 model: ‘claude-haiku-4-5-20251001’,
 max_tokens: 2000,
-messages: [{
-role: ‘user’,
-content: `You are an ordering assistant for Naan & Curry, an Indian restaurant in Las Vegas.
+messages: [{ role: ‘user’, content: `You are an ordering assistant for Naan & Curry restaurant.
 
-Use this item mapping to convert the order to exact Restaurant Depot item names:
+Item mapping:
 ${itemMapStr}
 
 Rules:
 
-- ONLY add items EXPLICITLY listed in the order with a quantity number
-- The quantity in the order = EXACT number to use (never change it)
-- If an item is NOT in the order message, do NOT add it
-- Skip: Ketchup, Vinegar, Coca-Cola, Fanta, Indian spices, disposables
-- Return ONLY a JSON array, no markdown, no explanation
+- ONLY add items explicitly listed with a quantity
+- Use EXACT quantity from order, never change it
+- Return ONLY a JSON array
 
-Format: [{“item”: “EXACT item name from map values”, “quantity”: NUMBER}]
+Format: [{“item”: “exact name from map”, “quantity”: NUMBER}]
 
-Order to parse:
-${message}`
-}]
-});
-
-const text = response.content[0].text.trim();
-try {
-const clean = text.replace(/`json|`/g, ‘’).trim();
-return JSON.parse(clean);
-} catch {
-return { error: ‘Could not parse order’ };
-}
+Order: ${message}` }] }); try { return JSON.parse(response.content[0].text.trim().replace(/\```json|```/g, ‘’).trim());
+} catch { return { error: true }; }
 }
 
-async function sendWhatsApp(to, message) {
-await twilioClient.messages.create({
-from: ‘whatsapp:’ + process.env.TWILIO_WHATSAPP_NUMBER,
-to: ‘whatsapp:’ + to,
-body: message
-});
+async function sendWhatsApp(to, body) {
+await twilioClient.messages.create({ from: ‘whatsapp:’ + process.env.TWILIO_WHATSAPP_NUMBER, to: ‘whatsapp:’ + to, body });
 }
 
-async function sendConfirmationEmail(orderItems, sender) {
-const orderList = orderItems.map(i => `• ${i.quantity}x ${i.item}`).join(’\n’);
+async function sendEmail(orderItems, sender) {
 await sgMail.send({
-from: ‘nicksodhi@gmail.com’,
-to: ‘nicksodhi@gmail.com’,
-subject: `✅ Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
-text: `Items added to Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart`
+from: ‘nicksodhi@gmail.com’, to: ‘nicksodhi@gmail.com’,
+subject: `Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
+text: `Order by ${sender}:\n\n${orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n')}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`
 });
 }
 
 async function addItem(page, item) {
-const isSingleOnly = SINGLE_ONLY_ITEMS.includes(item.item);
-console.log(`\n--- ${item.item} x${item.quantity} (${isSingleOnly ? 'single' : 'case'}) ---`);
+const isSingle = SINGLE_ONLY_ITEMS.includes(item.item);
+console.log(`\n[${item.item}] qty=${item.quantity} single=${isSingle}`);
 
-// Press Escape to close any open modal
 await page.keyboard.press(‘Escape’);
-await page.waitForTimeout(500);
+await page.waitForTimeout(300);
 
-// Find and click the Add button using weighted word matching
-const found = await page.evaluate(({ itemName }) => {
+// Find best matching Add button
+const found = await page.evaluate((itemName) => {
 const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ’ ‘).split(’ ’).filter(w => w.length >= 4);
-const priorityWords = words.filter(w => w.length >= 6);
-
-```
-const buttons = Array.from(document.querySelectorAll('button[aria-label*="Add"]'));
-let bestBtn = null, bestScore = -1;
-
-for (const btn of buttons) {
-  const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-  const score = words.filter(w => label.includes(w)).length
-              + priorityWords.filter(w => label.includes(w)).length * 3;
-  if (score > bestScore) { bestScore = score; bestBtn = btn; }
+const priority = words.filter(w => w.length >= 6);
+let best = null, bestScore = 0;
+for (const btn of document.querySelectorAll(‘button[aria-label*=“Add”]’)) {
+const label = (btn.getAttribute(‘aria-label’) || ‘’).toLowerCase();
+const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
+if (score > bestScore) { bestScore = score; best = btn; }
 }
-
-if (bestBtn && bestScore > 0) {
-  bestBtn.click();
-  return { label: bestBtn.getAttribute('aria-label'), score: bestScore };
-}
+if (best && bestScore > 0) { best.click(); return best.getAttribute(‘aria-label’); }
 return null;
-```
+}, item.item);
 
-}, { itemName: item.item });
+if (!found) { console.log(’  NOT FOUND’); return false; }
+console.log(`  Matched: ${found}`);
 
-if (!found) { console.log(`  NOT FOUND`); return false; }
-console.log(`  Opened: ${found.label} (score:${found.score})`);
-
-// Wait for modal to load — detect type
-let modalType = null;
+// Wait up to 8 seconds for modal
+let modalReady = false;
 for (let i = 0; i < 20; i++) {
 await page.waitForTimeout(400);
-modalType = await page.evaluate(() => {
+modalReady = await page.evaluate(() => {
 const btns = Array.from(document.querySelectorAll(‘button’));
 const labels = btns.map(b => (b.getAttribute(‘aria-label’) || ‘’).toLowerCase());
-if (labels.some(l => l.includes(‘increment case’))) return ‘case-stepper’;
-if (labels.some(l => l.includes(‘increment single’))) return ‘both-stepper’;
 if (labels.some(l => l.includes(‘increment’))) return ‘stepper’;
-if (document.querySelectorAll(‘select’).length > 0) return ‘dropdown’;
-// Listbox: numbered list items 1,2,3…
-const listItems = Array.from(document.querySelectorAll(’[role=“option”]’));
-if (listItems.some(l => /^\d+$/.test(l.textContent.trim()))) return ‘listbox’;
-return null;
+if (Array.from(document.querySelectorAll(’[role=“option”]’)).some(o => /^\d+$/.test(o.textContent.trim()))) return ‘listbox’;
+if (document.querySelector(‘select’)) return ‘dropdown’;
+return false;
 });
-if (modalType) break;
+if (modalReady) break;
 }
-console.log(`  Modal: ${modalType}`);
-if (!modalType) { console.log(`  Modal not loaded`); return false; }
+console.log(`  Modal: ${modalReady}`);
+if (!modalReady) { console.log(’  Modal failed’); return false; }
 
-// === SET QUANTITY ===
-if (modalType === ‘listbox’) {
-// Numbered dropdown list — click the right number directly
-// First check if the dropdown is already open, if not open it
-const isOpen = await page.evaluate(() =>
-Array.from(document.querySelectorAll(’[role=“option”]’)).some(l => /^\d+$/.test(l.textContent.trim()))
-);
-
-```
-if (!isOpen) {
-  // Click the quantity button to open the list
-  await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll('button'));
-    const qtyBtn = btns.find(b => /^\d+$/.test(b.textContent.trim()));
-    if (qtyBtn) qtyBtn.click();
-  });
-  await page.waitForTimeout(500);
+if (modalReady === ‘listbox’) {
+// Select quantity from numbered list
+const result = await page.evaluate((qty) => {
+const options = Array.from(document.querySelectorAll(’[role=“option”]’));
+const target = options.find(o => o.textContent.trim() === String(qty));
+if (target) { target.click(); return `selected ${qty}`; }
+const custom = options.find(o => o.textContent.toLowerCase().includes(‘custom’));
+if (custom) { custom.click(); return ‘custom’; }
+return ‘not found’;
+}, item.quantity);
+console.log(`  Listbox: ${result}`);
+if (result === ‘custom’) {
+await page.waitForTimeout(400);
+const input = await page.$(‘input[type=“number”], input[inputmode=“numeric”]’);
+if (input) {
+await input.fill(String(item.quantity));
+await input.dispatchEvent(‘change’);
 }
-
-// Click the right number
-const clicked = await page.evaluate(({ qty }) => {
-  const options = Array.from(document.querySelectorAll('[role="option"]'));
-  const target = options.find(o => o.textContent.trim() === qty.toString());
-  if (target) { target.click(); return `selected ${qty}`; }
-  // If qty > 9, use Custom Amount
-  const custom = options.find(o => o.textContent.toLowerCase().includes('custom'));
-  if (custom) { custom.click(); return 'custom'; }
-  return 'not found';
-}, { qty: item.quantity });
-console.log(`  Listbox: ${clicked}`);
-
-// If custom was clicked, type the value
-if (clicked === 'custom') {
-  await page.waitForTimeout(500);
-  await page.evaluate(({ qty }) => {
-    const input = document.querySelector('input[type="number"], input[inputmode="numeric"]');
-    if (input) {
-      input.value = qty.toString();
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  }, { qty: item.quantity });
 }
-await page.waitForTimeout(500);
-```
+await page.waitForTimeout(600);
 
-} else if (modalType === ‘dropdown’) {
-// HTML select element
-await page.evaluate(({ qty }) => {
+} else if (modalReady === ‘dropdown’) {
+await page.evaluate((qty) => {
 const sel = document.querySelector(‘select’);
-if (sel) {
-sel.value = qty.toString();
-sel.dispatchEvent(new Event(‘change’, { bubbles: true }));
-}
-}, { qty: item.quantity });
-console.log(`  Dropdown set to ${item.quantity}`);
-await page.waitForTimeout(500);
+if (sel) { sel.value = String(qty); sel.dispatchEvent(new Event(‘change’, { bubbles: true })); }
+}, item.quantity);
+await page.waitForTimeout(600);
 
 } else {
-// Stepper buttons (+/-)
+// Stepper buttons
 for (let i = 0; i < item.quantity; i++) {
-const clicked = await page.evaluate(({ isSingleOnly }) => {
+const clicked = await page.evaluate((isSingle) => {
 const btns = Array.from(document.querySelectorAll(‘button’));
-const labels = btns.map(b => ({ btn: b, label: (b.getAttribute(‘aria-label’) || ‘’).toLowerCase() }));
-
-```
-    const allLabels = labels.map(x => x.label).filter(l => l.includes('increment') || l.includes('increase'));
-    console.log('All increment labels:', allLabels.join(' | '));
-
-    if (isSingleOnly) {
-      // Single-only: prefer single button, avoid case button
-      const singleBtn = labels.find(x => x.label.includes('increment single') || x.label.includes('increase single'));
-      if (singleBtn) { singleBtn.btn.click(); return 'single+'; }
-      // Fallback: first + button (single row)
-      const plusBtns = btns.filter(b => b.textContent.trim() === '+');
-      if (plusBtns.length >= 1) { plusBtns[0].click(); return 'plus1-single'; }
-    } else {
-      // Case item: prefer case button
-      const caseBtn = labels.find(x => x.label.includes('increment case') || x.label.includes('increase case'));
-      if (caseBtn) { caseBtn.btn.click(); return 'case+'; }
-      // Fallback: any increment, then second + button
-      const anyBtn = labels.find(x => x.label.includes('increment') || x.label.includes('increase'));
-      if (anyBtn) { anyBtn.btn.click(); return anyBtn.label; }
-      const plusBtns = btns.filter(b => b.textContent.trim() === '+');
-      if (plusBtns.length >= 2) { plusBtns[1].click(); return 'plus2-case'; }
-      if (plusBtns.length >= 1) { plusBtns[0].click(); return 'plus1-only'; }
-    }
-
-    return 'none';
-  }, { isSingleOnly });
-  console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
-  await page.waitForTimeout(600);
+const labeled = btns.map(b => ({ b, l: (b.getAttribute(‘aria-label’) || ‘’).toLowerCase() }));
+if (!isSingle) {
+const c = labeled.find(x => x.l.includes(‘increment case’) || x.l.includes(‘increase case’));
+if (c) { c.b.click(); return ‘case’; }
 }
-```
-
+const s = labeled.find(x => x.l.includes(‘increment single’) || x.l.includes(‘increase single’));
+if (s) { s.b.click(); return ‘single’; }
+const any = labeled.find(x => x.l.includes(‘increment’) || x.l.includes(‘increase’));
+if (any) {
+if (isSingle) { any.b.click(); return ‘any-single’; }
+any.b.click(); return ‘any’;
+}
+const plus = btns.filter(b => b.textContent.trim() === ‘+’);
+if (!isSingle && plus.length >= 2) { plus[1].click(); return ‘+case’; }
+if (plus.length >= 1) { plus[0].click(); return ‘+first’; }
+return ‘none’;
+}, isSingle);
+console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
+await page.waitForTimeout(600);
+}
 }
 
-// === CONFIRM ADD TO CART ===
-await page.waitForTimeout(800);
+// Click confirm button — find modal button with small count or plain “Add to cart”
+await page.waitForTimeout(600);
 const confirmed = await page.evaluate(() => {
 const btns = Array.from(document.querySelectorAll(‘button’));
-const cartBtns = btns.filter(b => b.textContent.toLowerCase().includes(‘to cart’) || b.textContent.toLowerCase().includes(‘update’));
-console.log(‘Cart buttons:’, cartBtns.map(b => b.textContent.trim()).join(’ | ’));
-
-```
-// Find button with count > 0 and < 50 (avoid the order guide "Add 54 items" button)
-for (const btn of cartBtns) {
-  const text = btn.textContent.trim();
-  const match = text.match(/Add (\d+) items? to cart/i);
-  if (match && parseInt(match[1]) > 0 && parseInt(match[1]) < 50) {
-    btn.click(); return text;
-  }
+// Log all cart-related buttons
+const cartBtns = btns.filter(b => /to cart|update/i.test(b.textContent));
+console.log(‘CART_BTNS:’ + cartBtns.map(b => b.textContent.trim()).join(’|’));
+// Prefer button with count 1-49
+for (const b of cartBtns) {
+const m = b.textContent.match(/Add (\d+)/i);
+if (m && +m[1] > 0 && +m[1] < 50) { b.click(); return b.textContent.trim(); }
 }
-// Plain "Add to cart"
-const plain = cartBtns.find(b => /^add to cart$/i.test(b.textContent.trim()));
-if (plain) { plain.click(); return 'Add to cart'; }
-// Update cart
-const update = cartBtns.find(b => b.textContent.toLowerCase().includes('update'));
-if (update) { update.click(); return update.textContent.trim(); }
-
+// Plain “Add to cart”
+const plain = btns.find(b => /^add to cart$/i.test(b.textContent.trim()));
+if (plain) { plain.click(); return ‘Add to cart’; }
+// Update
+const upd = btns.find(b => /update/i.test(b.textContent));
+if (upd) { upd.click(); return upd.textContent.trim(); }
 return null;
-```
-
 });
-
 console.log(`  Confirmed: ${confirmed}`);
 await page.waitForTimeout(1500);
 return !!confirmed;
 }
 
-async function placeRestaurantDepotOrder(orderItems) {
+async function placeOrder(orderItems) {
 const browser = await chromium.launch({ headless: true, args: [’–no-sandbox’, ‘–disable-setuid-sandbox’] });
-const context = await browser.newContext({
-userAgent: ‘Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36’
-});
+const context = await browser.newContext({ userAgent: ‘Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36’ });
 const page = await context.newPage();
-page.on(‘console’, msg => { if (msg.text().includes(‘Cart buttons’)) console.log(`  BROWSER: ${msg.text()}`); });
+page.on(‘console’, m => { if (m.text().startsWith(‘CART_BTNS:’)) console.log(’  BROWSER:’, m.text()); });
 
 try {
-console.log(‘Logging in…’);
+// Login
 await page.goto(‘https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F’, { waitUntil: ‘domcontentloaded’, timeout: 30000 });
 await page.waitForTimeout(5000);
 await page.waitForSelector(’#email’, { timeout: 30000 });
 await page.fill(’#email’, process.env.RD_EMAIL);
-await page.waitForTimeout(500);
+await page.waitForTimeout(400);
 await page.fill(‘input[type=“password”]’, process.env.RD_PASSWORD);
-await page.waitForTimeout(500);
+await page.waitForTimeout(400);
 await page.click(‘button[type=“submit”]’);
 await page.waitForTimeout(5000);
 console.log(‘Logged in’);
 
 ```
-console.log('Loading order guide...');
-await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
-await page.waitForTimeout(6000);
-const btnCount = await page.evaluate(() => document.querySelectorAll('button[aria-label*="Add"]').length);
-console.log(`Found ${btnCount} Add buttons`);
-
-// Clear the cart first before adding new items
-console.log('Clearing cart...');
+// Clear cart
 await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
 await page.waitForTimeout(3000);
-
-// Remove all items from cart
-let cleared = false;
-for (let attempt = 0; attempt < 10; attempt++) {
+for (let i = 0; i < 60; i++) {
   const removed = await page.evaluate(() => {
-    const removeBtn = document.querySelector('button[aria-label*="Remove"]');
-    if (removeBtn) { removeBtn.click(); return true; }
-    // Also try text-based
     const btns = Array.from(document.querySelectorAll('button'));
-    const removeAny = btns.find(b => b.textContent.trim() === 'Remove');
-    if (removeAny) { removeAny.click(); return true; }
+    const removeBtn = btns.find(b => b.textContent.trim() === 'Remove' || (b.getAttribute('aria-label') || '').includes('Remove'));
+    if (removeBtn) { removeBtn.click(); return true; }
     return false;
   });
-  if (!removed) { cleared = true; break; }
-  await page.waitForTimeout(1500);
+  if (!removed) break;
+  await page.waitForTimeout(1200);
 }
-console.log(`Cart cleared: ${cleared}`);
+console.log('Cart cleared');
 
-// Go back to order guide
+// Load order guide
 await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
 await page.waitForTimeout(6000);
+console.log('Order guide loaded');
 
 const notFound = [];
 for (const item of orderItems) {
-  const success = await addItem(page, item);
-  if (!success) notFound.push(item.item);
+  const ok = await addItem(page, item);
+  if (!ok) notFound.push(item.item);
 }
 
-console.log(`\nDone. Not found: ${notFound.length ? notFound.join(', ') : 'none'}`);
 await browser.close();
+console.log('Done. Not found:', notFound.join(', ') || 'none');
 return { success: true, notFound };
 ```
 
-} catch (error) {
-console.error(‘Error:’, error.message);
+} catch (e) {
+console.error(e.message);
 await browser.close();
-return { success: false, error: error.message };
+return { success: false, error: e.message };
 }
 }
 
 app.post(’/whatsapp’, async (req, res) => {
 res.sendStatus(200);
-const incomingMsg = req.body.Body;
-const fromNumber = req.body.From.replace(‘whatsapp:’, ‘’);
-const senderName = fromNumber === process.env.YOUR_WHATSAPP_NUMBER ? ‘Nick’ : ‘Rahul’;
-console.log(`Message from ${senderName}: ${incomingMsg}`);
+const msg = req.body.Body;
+const from = req.body.From.replace(‘whatsapp:’, ‘’);
+const name = from === process.env.YOUR_WHATSAPP_NUMBER ? ‘Nick’ : ‘Rahul’;
+console.log(`From ${name}: ${msg}`);
 
-if (!AUTHORIZED_NUMBERS.includes(fromNumber)) { await sendWhatsApp(fromNumber, ‘❌ Not authorized.’); return; }
-await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Processing order...`);
+if (!AUTHORIZED_NUMBERS.includes(from)) { await sendWhatsApp(from, ‘❌ Not authorized’); return; }
+await sendWhatsApp(from, `✅ Got it ${name}! Processing...`);
 
 try {
-const parsedOrder = await parseOrder(incomingMsg);
-if (parsedOrder.error) { await sendWhatsApp(fromNumber, `❓ Couldn't parse that.`); return; }
+const order = await parseOrder(msg);
+if (order.error) { await sendWhatsApp(from, ‘❓ Could not parse order’); return; }
 
 ```
-const orderSummary = parsedOrder.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
-await sendWhatsApp(fromNumber, `📋 Adding to cart:\n\n${orderSummary}`);
+const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
+await sendWhatsApp(from, `📋 Adding to cart:\n\n${summary}`);
 
-const result = await placeRestaurantDepotOrder(parsedOrder);
+const result = await placeOrder(order);
 if (result.success) {
-  let msg = `🎉 Done! Checkout:\nmember.restaurantdepot.com/store/business/cart`;
-  if (result.notFound?.length) msg += `\n\n⚠️ Not found:\n${result.notFound.join('\n')}`;
-  await sendWhatsApp(fromNumber, msg);
-  await sendConfirmationEmail(parsedOrder, senderName);
+  let reply = `🎉 Done! Checkout:\nmember.restaurantdepot.com/store/business/cart`;
+  if (result.notFound?.length) reply += `\n\n⚠️ Not found: ${result.notFound.join(', ')}`;
+  await sendWhatsApp(from, reply);
+  await sendEmail(order, name);
 } else {
-  await sendWhatsApp(fromNumber, `⚠️ Error: ${result.error}`);
+  await sendWhatsApp(from, `⚠️ Error: ${result.error}`);
 }
 ```
 
-} catch (error) {
-console.error(‘Error:’, error);
-await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Order manually:\nmember.restaurantdepot.com/store/business/order-guide/19933806363004568`);
+} catch (e) {
+console.error(e);
+await sendWhatsApp(from, ‘⚠️ Something went wrong. Please order manually.’);
 }
 });
 
-app.get(’/’, (req, res) => res.send(‘Naan & Curry Agent is running! 🍛’));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Naan & Curry Agent running on port ${PORT}`));
+app.get(’/’, (req, res) => res.send(‘Naan & Curry Agent 🍛’));
+app.listen(process.env.PORT || 3000, () => console.log(‘Running’));
