@@ -137,12 +137,16 @@ async function addItem(page, item) {
     const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
     const priority = words.filter(w => w.length >= 6);
     let best = null, bestScore = 0;
-    for (const btn of document.querySelectorAll('button[aria-label*="Add"]')) {
+    
+    // Looks at ALL buttons to catch existing cart items (like "3 ct")
+    for (const btn of document.querySelectorAll('button')) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (!label) continue;
+      
       const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
       if (score > bestScore) { bestScore = score; best = btn; }
     }
-    if (best && bestScore > 0) { best.click(); return best.getAttribute('aria-label'); }
+    if (best && bestScore > 0) { best.click(); return best.getAttribute('aria-label') || best.textContent.trim(); }
     return null;
   }, item.item);
 
@@ -165,6 +169,10 @@ async function addItem(page, item) {
   }
   console.log(`  Modal: ${modalReady}`);
   if (!modalReady) { console.log('  Modal failed'); return false; }
+
+  // FIX: Force Playwright to wait 1.5 seconds so the website's cart network requests finish.
+  // If we click '+' too fast, the website ignores the first click entirely.
+  await page.waitForTimeout(1500);
 
   if (modalReady === 'listbox') {
     // Select quantity from numbered list
@@ -196,7 +204,6 @@ async function addItem(page, item) {
 
   } else {
     // Stepper buttons
-    // TWEAK: The modal defaults to 1 item. We start the loop at 1 to prevent the off-by-one error.
     for (let i = 1; i < item.quantity; i++) {
       const clicked = await page.evaluate((isSingle) => {
         const btns = Array.from(document.querySelectorAll('button'));
@@ -218,7 +225,9 @@ async function addItem(page, item) {
         return 'none';
       }, isSingle);
       console.log(`  [${i}/${item.quantity - 1} clicks] ${clicked}`);
-      await page.waitForTimeout(600);
+      
+      // FIX: Increased from 600ms to 800ms to guarantee no clicks are skipped
+      await page.waitForTimeout(800);
     }
   }
 
@@ -226,18 +235,14 @@ async function addItem(page, item) {
   await page.waitForTimeout(600);
   const confirmed = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
-    // Log all cart-related buttons
     const cartBtns = btns.filter(b => /to cart|update/i.test(b.textContent));
     console.log('CART_BTNS:' + cartBtns.map(b => b.textContent.trim()).join('|'));
-    // Prefer button with count 1-49
     for (const b of cartBtns) {
       const m = b.textContent.match(/Add (\d+)/i);
       if (m && +m[1] > 0 && +m[1] < 50) { b.click(); return b.textContent.trim(); }
     }
-    // Plain "Add to cart"
     const plain = btns.find(b => /^add to cart$/i.test(b.textContent.trim()));
     if (plain) { plain.click(); return 'Add to cart'; }
-    // Update
     const upd = btns.find(b => /update/i.test(b.textContent));
     if (upd) { upd.click(); return upd.textContent.trim(); }
     return null;
@@ -272,7 +277,6 @@ async function placeOrder(orderItems) {
     for (let i = 0; i < 60; i++) {
       const removed = await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
-        // TWEAK: Look for the new SVG trash icons and delete keywords
         const removeBtn = btns.find(b => {
           const txt = b.textContent.trim().toLowerCase();
           const aria = (b.getAttribute('aria-label') || '').toLowerCase();
