@@ -174,7 +174,8 @@ async function placeRestaurantDepotOrder(orderItems) {
     for (const item of orderItems) {
       console.log(`Adding: ${item.item} x${item.quantity}`);
 
-      const result = await page.evaluate(({ itemName, qty }) => {
+      // Step 1: Find and click the Add button for this item
+      const result = await page.evaluate(({ itemName }) => {
         const searchWords = itemName.toLowerCase()
           .replace(/[^a-z0-9 ]/g, ' ')
           .split(' ')
@@ -198,31 +199,43 @@ async function placeRestaurantDepotOrder(orderItems) {
           return { found: true, label: bestBtn.getAttribute('aria-label') };
         }
         return { found: false };
-      }, { itemName: item.item, qty: item.quantity });
+      }, { itemName: item.item });
 
       if (result.found) {
-        console.log(`Clicked: ${result.label}`);
-        await page.waitForTimeout(2000);
+        console.log(`Opened modal for: ${result.label}`);
+        await page.waitForTimeout(3000); // Wait for modal to open
 
-        // Click "Increment case quantity" button for total quantity times
-        // (first click on Add adds 0, then we click case + for each unit needed)
+        // Step 2: Click the Case + button the right number of times
         for (let i = 0; i < item.quantity; i++) {
           await page.evaluate(() => {
             const btns = Array.from(document.querySelectorAll('button'));
-            // Prefer "Increment case quantity" button, fall back to any increment
+            // Find the + button next to "Case of X" - it comes after the case price text
             const caseBtn = btns.find(b => {
               const label = (b.getAttribute('aria-label') || '').toLowerCase();
               return label.includes('increment case') || label.includes('increase case');
             });
-            const anyBtn = btns.find(b => {
-              const label = (b.getAttribute('aria-label') || '').toLowerCase();
-              return label.includes('increment') || label.includes('increase');
-            });
-            const btn = caseBtn || anyBtn;
-            if (btn) btn.click();
+            // Fall back: find all + buttons and pick the second one (case row)
+            if (!caseBtn) {
+              const plusBtns = btns.filter(b => b.textContent.trim() === '+');
+              if (plusBtns.length >= 2) plusBtns[1].click(); // second + = case row
+              else if (plusBtns.length === 1) plusBtns[0].click();
+            } else {
+              caseBtn.click();
+            }
           });
           await page.waitForTimeout(600);
         }
+
+        // Step 3: Click "Add X items to cart" button to confirm
+        await page.waitForTimeout(500);
+        await page.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const addToCart = btns.find(b => b.textContent.includes('Add') && b.textContent.includes('items to cart'));
+          if (addToCart) addToCart.click();
+        });
+        await page.waitForTimeout(2000);
+        console.log(`Added ${item.quantity} case(s) of ${item.item} to cart`);
+
       } else {
         console.log(`Not found: ${item.item}`);
       }
