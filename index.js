@@ -34,27 +34,25 @@ async function parseOrder(message) {
 
 Parse this WhatsApp message into a structured order list. The person may text in any casual format.
 
-Examples of valid orders:
-- "order 6 yellow onions" -> [{"item": "yellow onions", "quantity": "6", "unit": "each"}]
-- "10 lbs chicken tikka" -> [{"item": "chicken tikka", "quantity": "10", "unit": "lbs"}]
-- "need 2 cases naan and 5 lbs paneer" -> [{"item": "naan", "quantity": "2", "unit": "cases"}, {"item": "paneer", "quantity": "5", "unit": "lbs"}]
-- "get me some onions and chicken" -> [{"item": "onions", "quantity": "1", "unit": "each"}, {"item": "chicken", "quantity": "1", "unit": "each"}]
+Examples:
+- "order 6 yellow onions" -> [{"item": "yellow onions", "quantity": 6}]
+- "10 lbs chicken tikka and 2 cases naan" -> [{"item": "chicken tikka", "quantity": 10}, {"item": "naan", "quantity": 2}]
+- "need some paneer" -> [{"item": "paneer", "quantity": 1}]
 
 Rules:
-- If no unit is mentioned, use "each" for countable items and "lbs" for meat/produce by weight
-- If no quantity is mentioned, use "1"
-- Always return a valid JSON array, never return an error unless the message is completely unrelated to food ordering
-- The message does NOT need to start with "order"
+- quantity is always a whole number
+- if no quantity mentioned, use 1
+- always return valid JSON array
+- never return an error unless message has nothing to do with food
 
 Message: "${message}"
 
-Return ONLY a JSON array, no explanation, no markdown, just the array.`
+Return ONLY a JSON array, no explanation, no markdown.`
     }]
   });
 
   const text = response.content[0].text.trim();
   try {
-    // Strip any markdown just in case
     const clean = text.replace(/```json|```/g, '').trim();
     return JSON.parse(clean);
   } catch {
@@ -71,7 +69,7 @@ async function sendWhatsApp(to, message) {
 }
 
 async function sendConfirmationEmail(orderItems, sender) {
-  const orderList = orderItems.map(i => `• ${i.quantity} ${i.unit} ${i.item}`).join('\n');
+  const orderList = orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
   await transporter.sendMail({
     from: process.env.GMAIL_ADDRESS,
     to: [process.env.YOUR_EMAIL, process.env.RAHUL_EMAIL].join(','),
@@ -85,25 +83,23 @@ async function placeRestaurantDepotOrder(orderItems) {
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
-  
+
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
-  
+
   try {
+    // Login
     console.log('Navigating to Restaurant Depot login...');
-    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { 
-      waitUntil: 'domcontentloaded', 
-      timeout: 30000 
+    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
     });
-    
     await page.waitForTimeout(5000);
-    console.log('Page loaded, waiting for email field...');
 
     await page.waitForSelector('#email', { timeout: 30000 });
     console.log('Email field found, filling in credentials...');
-    
     await page.fill('#email', process.env.RD_EMAIL);
     await page.waitForTimeout(500);
     await page.fill('input[type="password"]', process.env.RD_PASSWORD);
@@ -112,39 +108,75 @@ async function placeRestaurantDepotOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in successfully');
 
-    console.log('Going to Order Guide...');
-    await page.goto('https://www.restaurantdepot.com/order-guide', { 
+    // Go directly to Naan & Curry order guide
+    console.log('Going to Naan & Curry order guide...');
+    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', {
       waitUntil: 'domcontentloaded',
-      timeout: 30000 
+      timeout: 30000
     });
-    await page.waitForTimeout(4000);
+    await page.waitForTimeout(5000);
+    console.log('Order guide loaded');
 
+    // Process each item
     for (const item of orderItems) {
-      console.log(`Adding: ${item.quantity} ${item.unit} of ${item.item}`);
+      console.log(`Looking for: ${item.item} (qty: ${item.quantity})`);
       try {
-        const searchBox = await page.$('input[placeholder*="search"], input[type="search"], .search-input');
-        if (searchBox) {
-          await searchBox.fill(item.item);
-          await page.waitForTimeout(2000);
+        // Find all "Add" buttons and match by aria-label containing item name
+        const itemName = item.item.toLowerCase();
+        
+        // Get all add buttons on page
+        const addButtons = await page.$$('button[aria-label*="Add"]');
+        let found = false;
+
+        for (const btn of addButtons) {
+          const label = await btn.getAttribute('aria-label');
+          if (label && label.toLowerCase().includes(itemName.split(' ')[0])) {
+            console.log(`Found item: ${label}`);
+            await btn.click();
+            await page.waitForTimeout(2000);
+
+            // If quantity > 1, click + button additional times
+            if (item.quantity > 1) {
+              for (let i = 1; i < item.quantity; i++) {
+                const plusBtn = await page.$('button[aria-label*="Increase"], button:has-text("+")');
+                if (plusBtn) {
+                  await plusBtn.click();
+                  await page.waitForTimeout(500);
+                }
+              }
+            }
+            found = true;
+            break;
+          }
         }
-        const qtyInputs = await page.$$('input[type="number"], .quantity-input, input[name*="qty"]');
-        if (qtyInputs.length > 0) {
-          await qtyInputs[0].fill(item.quantity.toString());
+
+        if (!found) {
+          console.log(`Item not found in order guide: ${item.item}`);
         }
-        await page.waitForTimeout(1000);
+
       } catch (err) {
-        console.log(`Could not add ${item.item}: ${err.message}`);
+        console.log(`Error adding ${item.item}: ${err.message}`);
       }
     }
 
-    console.log('Placing order...');
-    const orderBtn = await page.$('button:has-text("Add to Cart"), button:has-text("Place Order"), .add-to-cart, #place-order');
-    if (orderBtn) {
-      await orderBtn.click();
-      await page.waitForTimeout(3000);
+    console.log('All items processed, going to cart for pickup...');
+    
+    // Go to cart and select pickup
+    await page.goto('https://member.restaurantdepot.com/store/business/cart', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000
+    });
+    await page.waitForTimeout(3000);
+
+    // Select pickup option if available
+    const pickupBtn = await page.$('button:has-text("Pickup"), input[value="pickup"], label:has-text("Pickup")');
+    if (pickupBtn) {
+      await pickupBtn.click();
+      await page.waitForTimeout(1000);
+      console.log('Pickup selected');
     }
 
-    console.log('Order placed successfully');
+    console.log('Order added to cart successfully');
     await browser.close();
     return { success: true };
 
@@ -169,31 +201,31 @@ app.post('/whatsapp', async (req, res) => {
     return;
   }
 
-  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Placing your order on Restaurant Depot now...`);
+  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Looking up your order now...`);
 
   try {
     const parsedOrder = await parseOrder(incomingMsg);
 
     if (parsedOrder.error) {
-      await sendWhatsApp(fromNumber, `❓ I couldn't understand that. Try something like:\n\n"6 yellow onions, 10 lbs chicken tikka, 2 cases naan"`);
+      await sendWhatsApp(fromNumber, `❓ I couldn't understand that. Try:\n\n"6 yellow onions, 10 lbs chicken tikka, 2 cases naan"`);
       return;
     }
 
-    const orderSummary = parsedOrder.map(i => `• ${i.quantity} ${i.unit} - ${i.item}`).join('\n');
-    await sendWhatsApp(fromNumber, `📋 Order understood:\n\n${orderSummary}\n\nLogging into Restaurant Depot...`);
+    const orderSummary = parsedOrder.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
+    await sendWhatsApp(fromNumber, `📋 Order:\n\n${orderSummary}\n\nLogging into Restaurant Depot and adding to your cart...`);
 
     const result = await placeRestaurantDepotOrder(parsedOrder);
 
     if (result.success) {
-      await sendWhatsApp(fromNumber, `🎉 Order placed on Restaurant Depot!\n\nConfirmation email sent to you and Rahul.`);
+      await sendWhatsApp(fromNumber, `🎉 Items added to your cart on Restaurant Depot!\n\nLog in to confirm pickup and checkout:\nhttps://member.restaurantdepot.com/store/business/cart\n\nConfirmation email sent to you and Rahul.`);
       await sendConfirmationEmail(parsedOrder, senderName);
     } else {
-      await sendWhatsApp(fromNumber, `⚠️ Couldn't place automatically. Please log into Restaurant Depot manually.\n\nError: ${result.error}`);
+      await sendWhatsApp(fromNumber, `⚠️ Couldn't add items automatically.\n\nError: ${result.error}\n\nPlease add manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
     }
 
   } catch (error) {
     console.error('Error:', error);
-    await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Please place the order manually on Restaurant Depot.`);
+    await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Please order manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
   }
 });
 
