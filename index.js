@@ -93,7 +93,7 @@ async function placeRestaurantDepotOrder(orderItems) {
   
   try {
     console.log('Navigating to Restaurant Depot login...');
-    await page.goto('https://www.restaurantdepot.com/login', { 
+    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { 
       waitUntil: 'domcontentloaded', 
       timeout: 30000 
     });
