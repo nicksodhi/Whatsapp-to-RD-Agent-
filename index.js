@@ -158,73 +158,57 @@ async function sendEmail(orderItems, sender) {
 }
 
 // ── CART HELPERS ──────────────────────────────────────────────────────────────
-
-// Read all cart items using aria-label on the increment buttons.
 //
-// The previous version used CSS class selectors ([class*="cart-item"] etc.)
-// which returned 0 results because they don't match Restaurant Depot's DOM.
-// The site's buttons DO consistently carry aria-labels like:
-//   "increment quantity of jumbo red onions - 25 lbs"
-// That's the reliable hook — find every increment button, extract the item
-// name from its label, then walk up the DOM to find the current quantity.
+// Confirmed DOM structure from DevTools screenshots:
+//
+//   <div aria-label="product" role="group">          ← one per cart item
+//     ...item name text, price, etc...
+//     <button>                                        ← clicking opens stepper modal
+//       <span data-testid="cartStepper">1 ct</span>  ← current qty display
+//       <span class="screen-reader-only">Quantity: 1 item. Change quantity</span>
+//     </button>
+//     <button>Remove</button>                         ← remove button within group
+//   </div>
+//
+// After clicking the cartStepper button, the same stepper modal opens as on
+// the order guide. The confirm button says "Update cart" (not "Update guide"),
+// so we can actually update the quantity successfully.
+
+// Read all cart items from the drawer.
+// Returns array of { name, qty }.
 async function readCartItems(page) {
   return await page.evaluate(function() {
     var results = [];
-    var seen = {};
 
-    var allBtns = Array.from(document.querySelectorAll('button'));
+    // Each cart item lives in its own product group
+    var groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
 
-    // Every item in the cart has an increment button with an identifiable label
-    var incrementBtns = allBtns.filter(function(b) {
-      var l = (b.getAttribute('aria-label') || '').toLowerCase();
-      return l.includes('increment') || l.includes('increase');
-    });
-
-    incrementBtns.forEach(function(btn) {
-      var rawLabel = btn.getAttribute('aria-label') || '';
-
-      // Extract the item name portion from labels like:
-      //   "Increment quantity of Jumbo Red Onions - 25 lbs"
-      //   "Increase quantity: Fresh Ginger - 30 lbs"
-      //   "increment jumbo red onions - 25 lbs"
-      var name = rawLabel
-        .replace(/increment\s+(quantity\s+)?(of\s+)?/i, '')
-        .replace(/increase\s+(quantity\s+)?(of\s+)?/i, '')
-        .replace(/^\s*:\s*/, '')
-        .trim();
-
-      if (!name || name.length < 3 || seen[name]) return;
-      seen[name] = true;
-
-      // Walk up from the button to find the quantity value.
-      // Try an input first, then any standalone integer in the surrounding container.
-      var qty = null;
-      var el = btn.parentElement;
-      for (var depth = 0; depth < 8; depth++) {
-        if (!el) break;
-
-        var input = el.querySelector('input[type="number"], input[inputmode="numeric"]');
-        if (input) {
-          var v = parseInt(input.value, 10);
-          if (!isNaN(v) && v >= 0) { qty = v; break; }
-        }
-
-        // Look for a text node or span that is just a number
-        var nodes = Array.from(el.querySelectorAll('span, div, p, td, strong, b'));
-        for (var i = 0; i < nodes.length; i++) {
-          var t = (nodes[i].textContent || '').trim();
-          if (/^\d+$/.test(t)) {
-            var n = parseInt(t, 10);
-            if (n > 0 && n < 1000) { qty = n; break; }
-          }
-        }
-        if (qty !== null) break;
-
-        el = el.parentElement;
+    groups.forEach(function(group) {
+      // Quantity: parse the number from "1 ct", "12 ct", "1 pkg", etc.
+      var stepper = group.querySelector('[data-testid="cartStepper"]');
+      var qty = 1; // default
+      if (stepper) {
+        var m = stepper.textContent.match(/(\d+)/);
+        if (m) qty = parseInt(m[1], 10);
       }
 
-      // qty=null means we couldn't read it; default to 1 so we still attempt adjustment
-      results.push({ name: name, qty: qty !== null ? qty : 1 });
+      // Item name: scan all text nodes in the group, pick the one that looks
+      // like a product name — longer than 5 chars, not a price, not UI labels.
+      var skip = /^(\$[\d.]+|remove|replace|likely|many in stock|about|qty|per|lb|oz|fl|ct|pkg|gal|\d+(\.\d+)?(\s*(lb|oz|ct|gal|fl oz|z))?)$/i;
+      var candidates = Array.from(group.querySelectorAll('p, span, a, div, h1, h2, h3, h4, h5'))
+        .map(function(el) {
+          // Only consider leaf-ish nodes — skip containers with lots of nested children
+          if (el.children.length > 3) return '';
+          return (el.textContent || '').trim();
+        })
+        .filter(function(t) {
+          return t.length > 5 && t.length < 150 && !skip.test(t) && !/\$/.test(t);
+        });
+
+      // Pick the longest candidate as the most likely product name
+      var name = candidates.reduce(function(a, b) { return a.length >= b.length ? a : b; }, '');
+
+      if (name) results.push({ name: name, qty: qty });
     });
 
     return results;
@@ -244,113 +228,193 @@ function scoreMatch(cartName, orderedName) {
   return score;
 }
 
-// Click an increment, decrement, or remove button for a specific cart item.
-//
-// Uses aria-label matching so we directly target the right button without
-// needing to find the item's DOM container first.
-// For increment/decrement: the aria-label contains both the action AND the
-// item name, so we score all matching-direction buttons by item name overlap.
-// For remove: there's no item name in the aria-label, so we walk up from
-// buttons labeled "remove" and check parent text for item keywords.
-async function clickCartButton(page, itemName, direction) {
-  return await page.evaluate(function(itemName, direction) {
+// Find the product group in the cart that best matches itemName.
+// Returns the group element (in-browser), or null.
+// This runs inside page.evaluate so it returns a serialisable result —
+// we use it by passing itemName and getting back a boolean + clicking inline.
+async function clickStepperForItem(page, itemName) {
+  return await page.evaluate(function(itemName) {
     var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
       return w.length >= 3;
     });
-    var allBtns = Array.from(document.querySelectorAll('button'));
-
-    if (direction === 'increment' || direction === 'decrement') {
-      var keyword = direction === 'increment' ? 'increment' : 'decrement';
-      var altKeyword = direction === 'increment' ? 'increase' : 'decrease';
-      var plusMinus = direction === 'increment' ? '+' : '-';
-
-      var best = null, bestScore = 0;
-      allBtns.forEach(function(b) {
-        var label = (b.getAttribute('aria-label') || '').toLowerCase();
-        var text  = b.textContent.trim();
-
-        var isDir = label.includes(keyword) || label.includes(altKeyword) || text === plusMinus;
-        if (!isDir) return;
-
-        // Score by how many item name words appear in the aria-label
-        var score = words.filter(function(w) { return label.includes(w); }).length;
-        if (score > bestScore) { bestScore = score; best = b; }
-      });
-
-      if (best && bestScore > 0) { best.click(); return 'ok:aria:' + bestScore; }
-
-      // Fallback: plain +/- text button (no aria-label) — look for the one
-      // adjacent to this item's text by finding the closest + or - to item text
-      var plusMinusBtns = allBtns.filter(function(b) { return b.textContent.trim() === plusMinus; });
-      if (plusMinusBtns.length > 0) {
-        // If there's only one, click it. If multiple, try to scope to item.
-        if (plusMinusBtns.length === 1) { plusMinusBtns[0].click(); return 'ok:single-' + plusMinus; }
-      }
-
-      return 'no-match';
+    var groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
+    var best = null, bestScore = 0;
+    groups.forEach(function(g) {
+      var text = g.textContent.toLowerCase();
+      var score = words.filter(function(w) { return text.includes(w); }).length;
+      if (score > bestScore) { bestScore = score; best = g; }
+    });
+    if (!best || bestScore === 0) return 'no-match';
+    var stepperBtn = best.querySelector('[data-testid="cartStepper"]');
+    if (!stepperBtn) {
+      // Fallback: click the first button in the group (which wraps the stepper)
+      stepperBtn = best.querySelector('button');
     }
-
-    if (direction === 'remove') {
-      // Find a Remove button whose ancestor container mentions the item name
-      var removeBtns = allBtns.filter(function(b) {
-        var label = (b.getAttribute('aria-label') || '').toLowerCase();
-        var text  = (b.textContent || '').trim().toLowerCase();
-        return label.includes('remove') || text === 'remove';
-      });
-
-      for (var i = 0; i < removeBtns.length; i++) {
-        var btn = removeBtns[i];
-        var parent = btn.parentElement;
-        for (var depth = 0; depth < 7; depth++) {
-          if (!parent) break;
-          var parentText = (parent.textContent || '').toLowerCase();
-          var matches = words.filter(function(w) { return parentText.includes(w); }).length;
-          if (matches >= Math.min(2, words.length)) {
-            btn.click();
-            return 'ok:remove';
-          }
-          parent = parent.parentElement;
-        }
-      }
-      return 'no-remove-btn';
-    }
-
-    return 'unknown-direction';
-  }, itemName, direction);
+    if (!stepperBtn) return 'no-stepper';
+    stepperBtn.click();
+    return 'ok';
+  }, itemName);
 }
 
-// Adjust a cart item from currentQty to targetQty.
+// Click the Remove button scoped to the product group for this item.
+async function clickRemoveForItem(page, itemName) {
+  return await page.evaluate(function(itemName) {
+    var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
+      return w.length >= 3;
+    });
+    var groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
+    var best = null, bestScore = 0;
+    groups.forEach(function(g) {
+      var text = g.textContent.toLowerCase();
+      var score = words.filter(function(w) { return text.includes(w); }).length;
+      if (score > bestScore) { bestScore = score; best = g; }
+    });
+    if (!best || bestScore === 0) return 'no-match';
+    var btns = Array.from(best.querySelectorAll('button, a'));
+    var removeBtn = btns.find(function(b) {
+      var label = (b.getAttribute('aria-label') || '').toLowerCase();
+      var text  = (b.textContent || '').trim().toLowerCase();
+      return label === 'remove' || text === 'remove';
+    });
+    if (!removeBtn) return 'no-remove-btn';
+    removeBtn.click();
+    return 'ok';
+  }, itemName);
+}
+
+// Increment or decrement inside the open stepper modal.
+// Scoped to [role="dialog"] so we never click the wrong item's buttons.
+async function clickModalStepper(page, direction) {
+  return await page.evaluate(function(direction) {
+    var modal = document.querySelector('[role="dialog"]') || document;
+    var btns  = Array.from(modal.querySelectorAll('button'));
+    var keyword   = direction === 'increment' ? ['increment', 'increase'] : ['decrement', 'decrease'];
+    var plusMinus = direction === 'increment' ? '+' : '-';
+
+    var btn = btns.find(function(b) {
+      var l = (b.getAttribute('aria-label') || '').toLowerCase();
+      var t = b.textContent.trim();
+      return keyword.some(function(k) { return l.includes(k); }) || t === plusMinus;
+    });
+    if (btn) { btn.click(); return btn.getAttribute('aria-label') || btn.textContent.trim(); }
+    return 'none';
+  }, direction);
+}
+
+// Confirm the stepper modal after setting quantity.
+// From the cart, the button says "Update cart" (not "Update guide").
+async function confirmModal(page) {
+  for (var attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await page.waitForTimeout(1000);
+    var confirmed = await page.evaluate(function() {
+      var btns = Array.from(document.querySelectorAll('button')).reverse();
+      var labels = btns.map(function(b) { return b.textContent.trim(); }).join(' | ');
+      console.log('MODAL_BTNS:' + labels);
+
+      // Priority 1: "Update cart" — the expected button when modifying from cart
+      var upd = btns.find(function(b) { return /update\s+cart/i.test(b.textContent); });
+      if (upd) { upd.click(); return 'Update cart'; }
+
+      // Priority 2: "Add N items to cart" (N > 0, not the bulk 54-item button)
+      for (var i = 0; i < btns.length; i++) {
+        var m = btns[i].textContent.match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
+        if (m && +m[1] > 0 && +m[1] < 50) { btns[i].click(); return btns[i].textContent.trim(); }
+      }
+
+      // Priority 3: plain "Add to cart"
+      var plain = btns.find(function(b) { return /^add to cart$/i.test(b.textContent.trim()); });
+      if (plain) { plain.click(); return 'Add to cart'; }
+
+      return null;
+    });
+
+    if (confirmed) {
+      console.log('  Confirmed: ' + confirmed);
+      return confirmed;
+    }
+  }
+  console.log('  WARNING: no confirm button found');
+  return null;
+}
+
+// Wait for the stepper modal to fully disappear.
+async function waitForModalClose(page) {
+  for (var i = 0; i < 25; i++) {
+    await page.waitForTimeout(300);
+    var open = await page.evaluate(function() {
+      var modal = document.querySelector('[role="dialog"]');
+      if (!modal) return false;
+      // Modal is "open" only if it contains stepper buttons
+      return Array.from(modal.querySelectorAll('button')).some(function(b) {
+        var l = (b.getAttribute('aria-label') || '').toLowerCase();
+        return l.includes('increment') || l.includes('decrement') || l.includes('increase') || l.includes('decrease');
+      });
+    });
+    if (!open) break;
+  }
+  await page.waitForTimeout(400);
+}
+
+// Adjust a cart item's quantity by opening its stepper modal.
 async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
   var delta = targetQty - currentQty;
   if (delta === 0) {
     console.log('  [=] ' + itemName + ' already at ' + targetQty);
     return true;
   }
+
+  // Close any open modal first
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+
+  // Open the stepper for this item
+  var stepResult = await clickStepperForItem(page, itemName);
+  console.log('  [stepper] ' + itemName + ' → ' + stepResult);
+  if (stepResult !== 'ok') return false;
+
+  // Wait for modal to appear
+  var modalOpen = false;
+  for (var w = 0; w < 15; w++) {
+    await page.waitForTimeout(400);
+    modalOpen = await page.evaluate(function() {
+      var modal = document.querySelector('[role="dialog"]');
+      if (!modal) return false;
+      return Array.from(modal.querySelectorAll('button')).some(function(b) {
+        var l = (b.getAttribute('aria-label') || '').toLowerCase();
+        return l.includes('increment') || l.includes('decrement') ||
+               l.includes('increase')  || l.includes('decrease') ||
+               b.textContent.trim() === '+' || b.textContent.trim() === '-';
+      });
+    });
+    if (modalOpen) break;
+  }
+  if (!modalOpen) { console.log('  WARNING: modal never opened for ' + itemName); return false; }
+
+  // Click + or - the right number of times
   var direction = delta > 0 ? 'increment' : 'decrement';
   var clicks = Math.abs(delta);
   console.log('  [' + direction + '] ' + itemName + ': ' + currentQty + ' → ' + targetQty + ' (' + clicks + ' clicks)');
 
   for (var i = 0; i < clicks; i++) {
-    var result = await clickCartButton(page, itemName, direction);
-    console.log('    [' + (i + 1) + '/' + clicks + '] ' + result);
-    if (result === 'no-match') {
-      console.log('  WARNING: button not found for ' + itemName);
-      return false;
-    }
+    var r = await clickModalStepper(page, direction);
+    console.log('    [' + (i + 1) + '/' + clicks + '] ' + r);
     await page.waitForTimeout(600);
   }
+
+  // Confirm and close
+  await page.waitForTimeout(800);
+  await confirmModal(page);
+  await waitForModalClose(page);
   return true;
 }
 
-// Remove an item that isn't in today's order.
+// Remove a cart item that isn't in today's order.
 async function removeCartItem(page, cartName) {
   console.log('  [x] Remove: ' + cartName);
-  var result = await clickCartButton(page, cartName, 'remove');
+  var result = await clickRemoveForItem(page, cartName);
   console.log('    ' + result);
-  if (result !== 'ok:remove') {
-    // Last resort: click any visible "Remove" link on the page and hope it's the right one
-    // (only safe if the page removes one at a time with a confirm step)
-    console.log('  WARNING: could not scope remove to item — skipping');
+  if (result !== 'ok') {
+    console.log('  WARNING: could not find Remove for "' + cartName + '" — skipping');
     return false;
   }
   await page.waitForTimeout(1500);
@@ -461,6 +525,25 @@ async function placeOrder(orderItems) {
     // ── NAVIGATE TO CART ───────────────────────────────────────────────────────
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(4000);
+
+    // DEBUG: dump page URL + every button aria-label so we can see the exact
+    // cart DOM structure and fix the reader if it's still returning 0.
+    var debugInfo = await page.evaluate(function() {
+      var allBtns = Array.from(document.querySelectorAll('button'));
+      var labels = allBtns.map(function(b) {
+        var aria = b.getAttribute('aria-label') || '';
+        var txt  = b.textContent.trim().slice(0, 50);
+        return aria ? 'aria=[' + aria + ']' : 'txt=[' + txt + ']';
+      }).filter(function(l) { return l.length > 7; }).slice(0, 100);
+      // Also grab any input values (qty fields)
+      var inputs = Array.from(document.querySelectorAll('input')).map(function(inp) {
+        return 'input type=' + inp.type + ' val=' + inp.value + ' name=' + (inp.name || inp.id || '');
+      }).slice(0, 20);
+      return { url: window.location.href, btnCount: allBtns.length, labels: labels, inputs: inputs };
+    });
+    console.log('DEBUG | url=' + debugInfo.url + ' | buttons=' + debugInfo.btnCount);
+    debugInfo.labels.forEach(function(l) { console.log('  BTN: ' + l); });
+    debugInfo.inputs.forEach(function(l) { console.log('  INP: ' + l); });
 
     // Read cart items — retry up to 5 times if we get 0 (page may still be loading)
     var cartItems = [];
