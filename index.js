@@ -477,29 +477,36 @@ async function placeOrder(orderItems) {
     console.log('Cart cleared');
 
     // ── LOAD ORDER GUIDE ───────────────────────────────────────────────────────
+    // Use 'load' so React fully hydrates before we look for buttons.
     await page.goto(
       'https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',
-      { waitUntil: 'domcontentloaded', timeout: 30000 }
+      { waitUntil: 'load', timeout: 45000 }
     );
-    await page.waitForTimeout(6000);
+    await page.waitForTimeout(3000);
 
     // ── BULK ADD ALL GUIDE ITEMS ───────────────────────────────────────────────
     // Use data-testid="add-all-items-button" — more reliable than text matching.
-    var bulkLabel = await page.evaluate(function() {
-      var btn = document.querySelector('[data-testid="add-all-items-button"]');
-      if (!btn) {
-        // Fallback: text match for "Add N items to cart" with N >= 10
-        var btns = Array.from(document.querySelectorAll('button'));
-        btn = btns.find(function(b) {
-          var m = b.textContent.match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
-          return m && parseInt(m[1], 10) >= 10;
-        });
-      }
-      if (btn) { btn.click(); return btn.textContent.trim(); }
-      return null;
-    });
+    // Poll for the button — it may appear a few seconds after page load.
+    var bulkLabel = null;
+    for (var bulkAttempt = 0; bulkAttempt < 20; bulkAttempt++) {
+      bulkLabel = await page.evaluate(function() {
+        var btn = document.querySelector('[data-testid="add-all-items-button"]');
+        if (!btn) {
+          var btns = Array.from(document.querySelectorAll('button'));
+          btn = btns.find(function(b) {
+            var m = (b.textContent || '').trim().match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
+            return m && parseInt(m[1], 10) >= 10;
+          });
+        }
+        if (btn) { btn.click(); return (btn.textContent || '').trim(); }
+        return null;
+      });
+      if (bulkLabel) break;
+      console.log('Waiting for bulk add button... attempt ' + (bulkAttempt + 1));
+      await page.waitForTimeout(1500);
+    }
 
-    if (!bulkLabel) throw new Error('Could not find bulk "Add all to cart" button');
+    if (!bulkLabel) throw new Error('Could not find bulk "Add all to cart" button after 30s');
     console.log('Bulk add clicked: ' + bulkLabel);
 
     // The site shows a confirmation modal: "Add 54 items to cart?
