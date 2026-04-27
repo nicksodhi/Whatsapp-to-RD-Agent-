@@ -17,7 +17,6 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-// Added your specific case-to-single items here so Playwright always prefers the "Single" button for them
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
@@ -31,6 +30,16 @@ const SINGLE_ONLY_ITEMS = [
   "Chef's Quality - Lemon Juice - gallon",
   "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz"
 ];
+
+// BULLETPROOF FIX: We do the case math here in Javascript, not in the AI prompt.
+const CASE_CONVERSIONS = {
+  "Peeled Garlic": 6,
+  "White Cauliflower": 12,
+  "MILK WHL GAL GS/AN": 4,
+  "Chef's Quality - Liquid Butter Alternative - gallon": 3,
+  "Chef's Quality - Lemon Juice - gallon": 4,
+  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz": 3
+};
 
 const ITEM_MAP = {
   "yellow onions": "Jumbo Spanish Onions - 50 lbs",
@@ -110,24 +119,10 @@ ${itemMapStr}
 Rules:
 - IGNORE headers, dates, and employee names (e.g. "Sat, Apr 25 | Mohan", "RESTAURANT DEPOT")
 - ONLY add items explicitly listed with a quantity
+- Use EXACT quantity from the order. DO NOT DO ANY MATH OR CONVERSIONS.
 - Return ONLY a JSON array
 
-IMPORTANT - QUANTITY CONVERSIONS:
-The chefs text their orders in "Cases", but our cart requires individual units ("Singles").
-If the chef orders any of the following items, you MUST MULTIPLY their requested quantity by the case size to get the final cart quantity:
-- Garlic: Multiply by 6 (e.g., "Garlic: 1" -> quantity 6)
-- Cauliflower: Multiply by 12 (e.g., "Cauliflower: 1" -> quantity 12)
-- Milk: Multiply by 4 (e.g., "Milk: 2" -> quantity 8)
-- Liquid Butter: Multiply by 3
-- Lemon Juice: Multiply by 4
-- Sambal: Multiply by 3
-
-EXCEPTION:
-- Mint: Always ordered in single 1lb bags. DO NOT multiply. (e.g., "Mint: 2" -> quantity 2)
-
-For all other items, use the exact quantity from the order.
-
-Format: [{"item": "exact name from map", "quantity": CALCULATED_NUMBER}]
+Format: [{"item": "exact name from map", "quantity": NUMBER}]
 
 Order: ${message}` }]
     });
@@ -135,7 +130,17 @@ Order: ${message}` }]
     const text = response.content[0].text;
     const match = text.match(/\[[\s\S]*\]/); 
     const jsonStr = match ? match[0] : text;
-    return JSON.parse(jsonStr);
+    let parsedArray = JSON.parse(jsonStr);
+
+    // Apply strict JavaScript math to convert cases to singles
+    parsedArray = parsedArray.map(i => {
+      if (CASE_CONVERSIONS[i.item]) {
+        i.quantity = i.quantity * CASE_CONVERSIONS[i.item];
+      }
+      return i;
+    });
+
+    return parsedArray;
 
   } catch (err) { 
     console.error("AI Error:", err.message);
