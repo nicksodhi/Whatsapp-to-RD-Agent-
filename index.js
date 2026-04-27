@@ -17,6 +17,7 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
+// Added Heavy Cream and Mixed Veggies to the strict single-click list
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
@@ -28,17 +29,21 @@ const SINGLE_ONLY_ITEMS = [
   'MILK WHL GAL GS/AN',
   "Chef's Quality - Liquid Butter Alternative - gallon",
   "Chef's Quality - Lemon Juice - gallon",
-  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz"
+  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz",
+  "James Farm - Heavy Cream, 40% - 64 oz",
+  "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs"
 ];
 
-// BULLETPROOF FIX: Case math stays strictly in Javascript
+// Added Heavy Cream (6) and Mixed Veggies (12) to the JS math dictionary
 const CASE_CONVERSIONS = {
   "Peeled Garlic": 6,
   "White Cauliflower": 12,
   "MILK WHL GAL GS/AN": 4,
   "Chef's Quality - Liquid Butter Alternative - gallon": 3,
   "Chef's Quality - Lemon Juice - gallon": 4,
-  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz": 3
+  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz": 3,
+  "James Farm - Heavy Cream, 40% - 64 oz": 6,
+  "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs": 12
 };
 
 const ITEM_MAP = {
@@ -200,7 +205,9 @@ async function addItem(page, item) {
   
   if (!modalReady) { console.log('  Modal failed'); return false; }
 
-  await page.waitForTimeout(1500);
+  // THE FIX: Increased wait to a full 3 seconds.
+  // This guarantees the DOM is unlocked and ready to accept the first "+" click.
+  await page.waitForTimeout(3000);
 
   if (modalReady === 'listbox') {
     const result = await page.evaluate((qty) => {
@@ -229,7 +236,6 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    // THE DETERMINISTIC SCOPED CLICKER
     const clicksNeeded = item.quantity - 1;
     console.log(`  Target: ${item.quantity}, Clicks needed: ${clicksNeeded}`);
 
@@ -254,7 +260,6 @@ async function addItem(page, item) {
             
             if (!isPlus) continue;
             
-            // Traverses exactly 6 levels up to capture the product card, ignoring global headers
             let parent = b;
             for(let j=0; j<6; j++) {
               if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
@@ -273,7 +278,9 @@ async function addItem(page, item) {
         }, { itemName: item.item, isSingle });
         
         console.log(`  [+ ${i+1}/${clicksNeeded}] ${clicked}`);
-        await page.waitForTimeout(800);
+        
+        // Increased breathing room between clicks
+        await page.waitForTimeout(1200);
       }
     }
   }
