@@ -132,13 +132,11 @@ async function addItem(page, item) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
 
-  // Find best matching Add button
   const found = await page.evaluate((itemName) => {
     const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
     const priority = words.filter(w => w.length >= 6);
     let best = null, bestScore = 0;
     
-    // Looks at ALL buttons to catch existing cart items (like "3 ct")
     for (const btn of document.querySelectorAll('button')) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
       if (!label) continue;
@@ -153,7 +151,6 @@ async function addItem(page, item) {
   if (!found) { console.log('  NOT FOUND'); return false; }
   console.log(`  Matched: ${found}`);
 
-  // Wait up to 8 seconds for modal
   let modalReady = false;
   for (let i = 0; i < 20; i++) {
     await page.waitForTimeout(400);
@@ -170,12 +167,9 @@ async function addItem(page, item) {
   console.log(`  Modal: ${modalReady}`);
   if (!modalReady) { console.log('  Modal failed'); return false; }
 
-  // FIX: Force Playwright to wait 1.5 seconds so the website's cart network requests finish.
-  // If we click '+' too fast, the website ignores the first click entirely.
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1000);
 
   if (modalReady === 'listbox') {
-    // Select quantity from numbered list
     const result = await page.evaluate((qty) => {
       const options = Array.from(document.querySelectorAll('[role="option"]'));
       const target = options.find(o => o.textContent.trim() === String(qty));
@@ -203,35 +197,55 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    // Stepper buttons
-    for (let i = 1; i < item.quantity; i++) {
-      const clicked = await page.evaluate((isSingle) => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
-        if (!isSingle) {
-          const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
-          if (c) { c.b.click(); return 'case'; }
-        }
-        const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
-        if (s) { s.b.click(); return 'single'; }
-        const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
-        if (any) {
-          if (isSingle) { any.b.click(); return 'any-single'; }
-          any.b.click(); return 'any';
-        }
-        const plus = btns.filter(b => b.textContent.trim() === '+');
-        if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
-        if (plus.length >= 1) { plus[0].click(); return '+first'; }
-        return 'none';
-      }, isSingle);
-      console.log(`  [${i}/${item.quantity - 1} clicks] ${clicked}`);
+    // ===============================================
+    // BULLETPROOF FIX: Directly Type the Quantity
+    // ===============================================
+    let typedSuccess = false;
+    try {
+      // Find the hidden text box in the stepper
+      const qtyInput = await page.$('input[type="number"], input[inputmode="numeric"], input[aria-label*="quantity" i], input[aria-label*="Quantity" i]');
       
-      // FIX: Increased from 600ms to 800ms to guarantee no clicks are skipped
-      await page.waitForTimeout(800);
+      if (qtyInput) {
+        // Force the input to exact quantity
+        await qtyInput.fill(String(item.quantity));
+        await qtyInput.dispatchEvent('change');
+        await page.keyboard.press('Tab'); // Forces website to register the update
+        await page.waitForTimeout(1000);
+        console.log(`  -> Typed exact quantity (${item.quantity}) directly into input box.`);
+        typedSuccess = true;
+      }
+    } catch (e) {
+      console.log('  -> Input box not found, falling back to manual clicking.');
+    }
+
+    // Fallback ONLY if typing fails
+    if (!typedSuccess) {
+      for (let i = 1; i < item.quantity; i++) {
+        const clicked = await page.evaluate((isSingle) => {
+          const btns = Array.from(document.querySelectorAll('button'));
+          const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
+          if (!isSingle) {
+            const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
+            if (c) { c.b.click(); return 'case'; }
+          }
+          const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
+          if (s) { s.b.click(); return 'single'; }
+          const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
+          if (any) {
+            if (isSingle) { any.b.click(); return 'any-single'; }
+            any.b.click(); return 'any';
+          }
+          const plus = btns.filter(b => b.textContent.trim() === '+');
+          if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
+          if (plus.length >= 1) { plus[0].click(); return '+first'; }
+          return 'none';
+        }, isSingle);
+        console.log(`  [${i}/${item.quantity - 1} clicks] ${clicked}`);
+        await page.waitForTimeout(800);
+      }
     }
   }
 
-  // Click confirm button — find modal button with small count or plain "Add to cart"
   await page.waitForTimeout(600);
   const confirmed = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
@@ -259,7 +273,6 @@ async function placeOrder(orderItems) {
   page.on('console', m => { if (m.text().startsWith('CART_BTNS:')) console.log('  BROWSER:', m.text()); });
 
   try {
-    // Login
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(5000);
     await page.waitForSelector('#email', { timeout: 30000 });
@@ -271,7 +284,6 @@ async function placeOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in');
 
-    // Clear cart
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
     for (let i = 0; i < 60; i++) {
@@ -291,7 +303,6 @@ async function placeOrder(orderItems) {
     }
     console.log('Cart cleared');
 
-    // Load order guide
     await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(6000);
     console.log('Order guide loaded');
