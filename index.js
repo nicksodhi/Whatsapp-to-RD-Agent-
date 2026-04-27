@@ -526,39 +526,42 @@ async function placeOrder(orderItems) {
     if (!confirmed) throw new Error('Bulk add confirmation modal never appeared');
     console.log('Bulk add confirmed ("Yes, continue" clicked)');
 
-    // Wait for all 54 items to land in the cart before navigating away.
-    await page.waitForTimeout(8000);
-
-    // ── NAVIGATE TO CART ───────────────────────────────────────────────────────
-    await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // The cart is a drawer overlay — do NOT navigate away from the order guide.
+    // Instead, click the cart icon in the header to open the drawer on this page.
+    // Give the bulk add a moment to register before we open it.
     await page.waitForTimeout(4000);
 
-    // DEBUG: dump page URL + every button aria-label so we can see the exact
-    // cart DOM structure and fix the reader if it's still returning 0.
-    var debugInfo = await page.evaluate(function() {
-      var allBtns = Array.from(document.querySelectorAll('button'));
-      var labels = allBtns.map(function(b) {
-        var aria = b.getAttribute('aria-label') || '';
-        var txt  = b.textContent.trim().slice(0, 50);
-        return aria ? 'aria=[' + aria + ']' : 'txt=[' + txt + ']';
-      }).filter(function(l) { return l.length > 7; }).slice(0, 100);
-      // Also grab any input values (qty fields)
-      var inputs = Array.from(document.querySelectorAll('input')).map(function(inp) {
-        return 'input type=' + inp.type + ' val=' + inp.value + ' name=' + (inp.name || inp.id || '');
-      }).slice(0, 20);
-      return { url: window.location.href, btnCount: allBtns.length, labels: labels, inputs: inputs };
-    });
-    console.log('DEBUG | url=' + debugInfo.url + ' | buttons=' + debugInfo.btnCount);
-    debugInfo.labels.forEach(function(l) { console.log('  BTN: ' + l); });
-    debugInfo.inputs.forEach(function(l) { console.log('  INP: ' + l); });
+    // ── OPEN CART DRAWER ───────────────────────────────────────────────────────
+    var drawerOpened = false;
+    for (var drawerAttempt = 0; drawerAttempt < 15; drawerAttempt++) {
+      drawerOpened = await page.evaluate(function() {
+        var btns = Array.from(document.querySelectorAll('button'));
+        // Cart icon button: aria-label="View Cart. Items in cart: 53"
+        var cartBtn = btns.find(function(b) {
+          var l = (b.getAttribute('aria-label') || '').toLowerCase();
+          return l.includes('view cart') || l.includes('cart. items') || l.includes('items in cart');
+        });
+        if (cartBtn) { cartBtn.click(); return true; }
+        return false;
+      });
+      if (drawerOpened) break;
+      console.log('Waiting for cart icon... attempt ' + (drawerAttempt + 1));
+      await page.waitForTimeout(1000);
+    }
+    if (!drawerOpened) throw new Error('Could not find cart icon button to open drawer');
+    console.log('Cart drawer opened');
 
-    // Read cart items — retry up to 5 times if we get 0 (page may still be loading)
+    // Wait for product group elements to appear in the drawer
+    await page.waitForSelector('[aria-label="product"][role="group"]', { timeout: 20000 });
+    await page.waitForTimeout(1500); // let all items render
+
+    // Read cart items — retry if needed
     var cartItems = [];
     for (var retry = 0; retry < 5; retry++) {
       cartItems = await readCartItems(page);
       if (cartItems.length > 0) break;
       console.log('Cart read attempt ' + (retry + 1) + ' returned 0 items — retrying...');
-      await page.waitForTimeout(3000);
+      await page.waitForTimeout(2000);
     }
 
     console.log('Cart loaded: ' + cartItems.length + ' items');
