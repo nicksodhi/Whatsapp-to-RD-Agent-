@@ -17,7 +17,7 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-// Items that are always ordered as individual singles (no case)
+// Items ordered as individual units (no case multiplier)
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
@@ -26,9 +26,9 @@ const SINGLE_ONLY_ITEMS = [
   'Carrots- 10 lb',
 ];
 
-// How many individual units are in one case of each item.
-// Used ONLY when the item has no case+ button (falls back to clicking single+ repeatedly).
-// If the item has a case+ button, we just click it N times and ignore this table.
+// Units per case for each item.
+// Used to convert "cases ordered" into "cart units" so we know
+// what number to dial each cart row up or down to.
 const CASE_SIZES = {
   'Peeled Garlic':                                              6,
   'White Cauliflower':                                         12,
@@ -41,67 +41,69 @@ const CASE_SIZES = {
 };
 
 const ITEM_MAP = {
-  'yellow onions':      'Jumbo Spanish Onions - 50 lbs',
-  'red onions':         'Jumbo Red Onions - 25 lbs',
-  'potato':             'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
-  'potatoes':           'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
-  'garlic':             'Peeled Garlic',
-  'ginger':             'Fresh Ginger - 30 lbs',
-  'paneer':             'Royal Mahout - Paneer Loaf - 5 lbs',
-  'flowers':            'Micro Orchid Flowers - 4 oz',
-  'garnish':            'Micro Orchid Flowers - 4 oz',
-  'cilantro':           'Taylor Farms - Bagged Cilantro',
-  'cucumber':           'Cucumbers - 6 ct',
-  'cauliflower':        'White Cauliflower',
-  'carrots':            'Carrots- 10 lb',
-  'lemon':              'Lemons, 71-115 ct',
-  'lemons':             'Lemons, 71-115 ct',
-  'mint':               'Herb - Mint- 1lb',
-  'heavy cream':        'James Farm - Heavy Cream, 40% - 64 oz',
-  'milk':               'MILK WHL GAL GS/AN',
-  'yogurt':             'James Farm - Plain Yogurt - 32 lbs',
-  'cheese':             'James Farm - Shredded Cheddar Jack Cheese - 5 lbs',
-  'chicken breast':     'Boneless, Skinless Chicken Breasts, Tenders Out, Dry',
-  'chicken thighs':     'Boneless, Skinless Jumbo Chicken Thighs',
+  'yellow onions':        'Jumbo Spanish Onions - 50 lbs',
+  'red onions':           'Jumbo Red Onions - 25 lbs',
+  'potato':               'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
+  'potatoes':             'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
+  'garlic':               'Peeled Garlic',
+  'ginger':               'Fresh Ginger - 30 lbs',
+  'paneer':               'Royal Mahout - Paneer Loaf - 5 lbs',
+  'flowers':              'Micro Orchid Flowers - 4 oz',
+  'garnish':              'Micro Orchid Flowers - 4 oz',
+  'cilantro':             'Taylor Farms - Bagged Cilantro',
+  'cucumber':             'Cucumbers - 6 ct',
+  'cauliflower':          'White Cauliflower',
+  'carrots':              'Carrots- 10 lb',
+  'lemon':                'Lemons, 71-115 ct',
+  'lemons':               'Lemons, 71-115 ct',
+  'mint':                 'Herb - Mint- 1lb',
+  'heavy cream':          'James Farm - Heavy Cream, 40% - 64 oz',
+  'milk':                 'MILK WHL GAL GS/AN',
+  'yogurt':               'James Farm - Plain Yogurt - 32 lbs',
+  'cheese':               'James Farm - Shredded Cheddar Jack Cheese - 5 lbs',
+  'chicken breast':       'Boneless, Skinless Chicken Breasts, Tenders Out, Dry',
+  'chicken thighs':       'Boneless, Skinless Jumbo Chicken Thighs',
   'chicken leg quarters': 'Fresh Chicken Leg Quarters - 40 lbs',
-  'chicken wings':      'Jumbo Chicken Party Wings (6-8 ct)',
-  'wings':              'Jumbo Chicken Party Wings (6-8 ct)',
-  'chicken leg meat':   'Fresh Boneless Skinless Chicken Leg Meat',
-  'lamb':               'Frozen Halal Boneless Lamb Leg, Australia',
-  'goat':               'Thomas Farms - Bone in Goat Cube - #15',
-  'tilapia':            'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs',
-  'fish':               'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs',
-  'frozen spinach':     'Frozen James Farm - Frozen Chopped Spinach - 3 lbs',
-  'frozen peas':        'Frozen James Farm - IQF Peas - 2.5 lbs',
-  'frozen broccoli':    'Frozen James Farm - IQF Broccoli Florets - 2 lbs',
-  'frozen 4-way mix':   'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
-  '4-way mix':          'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
-  'roti atta':          'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
-  'atta':               'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
-  'all purpose flour':  "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
-  'flour':              "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
-  'baking powder':      'Clabber Girl - Baking Powder - 5 lbs',
-  'corn starch':        'Clabber Girl Cornstarch - 3 lbs',
-  'rice':               "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
-  'basmati rice':       "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
-  'garbanzo':           "Chef's Quality - Garbanzo Beans - #10 can",
-  'kidney beans':       "Chef's Quality - Dark Red Kidney Beans - #10 cans",
-  'salt':               'Morton - Purex Salt - 50lb',
-  'sugar':              'C&H - Granulated Sugar - 25 lbs',
-  'tomato sauce':       "Chef's Quality - Tomato Sauce - #10 cans",
-  'diced tomatoes':     'Isabella - Petite Diced Tomatoes -#10 cans',
-  'liquid butter':      "Chef's Quality - Liquid Butter Alternative - gallon",
-  'cooking oil':        "Chef's Quality - Soybean Salad Oil - 35 lbs",
-  'fryer oil':          "Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs",
-  'canola oil':         "Chef's Quality - 100% Canola Salad Oil - 35 lbs",
-  'sambal':             'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
-  'sambal chili':       'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
-  'lemon juice':        "Chef's Quality - Lemon Juice - gallon",
-  'red food color':     'Felbro - Red Food Coloring - gallon',
-  'water':              'Evian - Natural Spring Water, 24 Ct, 500 mL',
-  'sprite':             'Sprite Bottles, 16.9 fl oz, 4 Pack',
-  'diet coke':          'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
+  'chicken wings':        'Jumbo Chicken Party Wings (6-8 ct)',
+  'wings':                'Jumbo Chicken Party Wings (6-8 ct)',
+  'chicken leg meat':     'Fresh Boneless Skinless Chicken Leg Meat',
+  'lamb':                 'Frozen Halal Boneless Lamb Leg, Australia',
+  'goat':                 'Thomas Farms - Bone in Goat Cube - #15',
+  'tilapia':              'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs',
+  'fish':                 'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs',
+  'frozen spinach':       'Frozen James Farm - Frozen Chopped Spinach - 3 lbs',
+  'frozen peas':          'Frozen James Farm - IQF Peas - 2.5 lbs',
+  'frozen broccoli':      'Frozen James Farm - IQF Broccoli Florets - 2 lbs',
+  'frozen 4-way mix':     'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
+  '4-way mix':            'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
+  'roti atta':            'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
+  'atta':                 'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
+  'all purpose flour':    "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
+  'flour':                "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
+  'baking powder':        'Clabber Girl - Baking Powder - 5 lbs',
+  'corn starch':          'Clabber Girl Cornstarch - 3 lbs',
+  'rice':                 "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
+  'basmati rice':         "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
+  'garbanzo':             "Chef's Quality - Garbanzo Beans - #10 can",
+  'kidney beans':         "Chef's Quality - Dark Red Kidney Beans - #10 cans",
+  'salt':                 'Morton - Purex Salt - 50lb',
+  'sugar':                'C&H - Granulated Sugar - 25 lbs',
+  'tomato sauce':         "Chef's Quality - Tomato Sauce - #10 cans",
+  'diced tomatoes':       'Isabella - Petite Diced Tomatoes -#10 cans',
+  'liquid butter':        "Chef's Quality - Liquid Butter Alternative - gallon",
+  'cooking oil':          "Chef's Quality - Soybean Salad Oil - 35 lbs",
+  'fryer oil':            "Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs",
+  'canola oil':           "Chef's Quality - 100% Canola Salad Oil - 35 lbs",
+  'sambal':               'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
+  'sambal chili':         'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
+  'lemon juice':          "Chef's Quality - Lemon Juice - gallon",
+  'red food color':       'Felbro - Red Food Coloring - gallon',
+  'water':                'Evian - Natural Spring Water, 24 Ct, 500 mL',
+  'sprite':               'Sprite Bottles, 16.9 fl oz, 4 Pack',
+  'diet coke':            'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
 };
+
+// ── ORDER PARSER ──────────────────────────────────────────────────────────────
 
 async function parseOrder(message) {
   var itemMapStr = Object.entries(ITEM_MAP).map(function(pair) {
@@ -112,7 +114,19 @@ async function parseOrder(message) {
     var response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1000,
-      messages: [{ role: 'user', content: 'You are an ordering assistant for Naan & Curry restaurant.\n\nItem mapping:\n' + itemMapStr + '\n\nRules:\n- IGNORE headers, dates, and names (e.g. "RESTAURANT DEPOT", "Mohan", "Sat Apr 25")\n- ONLY add items explicitly listed with a quantity number\n- Use the EXACT quantity from the order. Never change it or do math.\n- Return ONLY a valid JSON array\n\nFormat: [{"item": "exact name from map values", "quantity": NUMBER}]\n\nOrder: ' + message }]
+      messages: [{
+        role: 'user',
+        content:
+          'You are an ordering assistant for Naan & Curry restaurant.\n\n' +
+          'Item mapping:\n' + itemMapStr + '\n\n' +
+          'Rules:\n' +
+          '- IGNORE headers, dates, and names (e.g. "RESTAURANT DEPOT", "Mohan", "Sat Apr 25")\n' +
+          '- ONLY add items explicitly listed with a quantity number\n' +
+          '- Use the EXACT quantity from the order. Never change it or do math.\n' +
+          '- Return ONLY a valid JSON array\n\n' +
+          'Format: [{"item": "exact name from map values", "quantity": NUMBER}]\n\n' +
+          'Order: ' + message
+      }]
     });
     var text = response.content[0].text;
     var match = text.match(/\[[\s\S]*\]/);
@@ -122,6 +136,8 @@ async function parseOrder(message) {
     return { error: true };
   }
 }
+
+// ── MESSAGING ─────────────────────────────────────────────────────────────────
 
 async function sendWhatsApp(to, body) {
   var chunks = body.match(/[\s\S]{1,1400}/g) || [body];
@@ -145,325 +161,198 @@ async function sendEmail(orderItems, sender) {
   });
 }
 
-// ── MODAL HELPERS ────────────────────────────────────────────────────────────
+// ── CART HELPERS ──────────────────────────────────────────────────────────────
 
-// FIX 1: Scope increment clicks to the open modal, not the entire page.
-// The original bug: after clicking "Update guide" for Orchid Flowers, the
-// modal sometimes didn't fully close. Subsequent items (Carrots, Lemons,
-// Mint) then found the flowers stepper still in the DOM and kept clicking it,
-// which is why the log showed "increment quantity of micro orchid flowers"
-// for completely unrelated items.
-async function clickIncrementButton(page, preferCase) {
-  return await page.evaluate(function(preferCase) {
-    // Prefer buttons scoped inside the open modal/drawer/dialog.
-    // Fall back to full document only if no modal container is found.
-    var modalRoot = (
-      document.querySelector('[role="dialog"]') ||
-      document.querySelector('[class*="modal" i]') ||
-      document.querySelector('[class*="drawer" i]') ||
-      document.querySelector('[class*="side-panel" i]') ||
-      document.querySelector('[class*="overlay" i]') ||
-      document
-    );
-    var btns = Array.from(modalRoot.querySelectorAll('button'));
-    var labeled = btns.map(function(b) {
-      return { b: b, l: (b.getAttribute('aria-label') || '').toLowerCase() };
-    });
-    if (preferCase) {
-      var caseBtn = labeled.find(function(x) {
-        return x.l.includes('increment case') || x.l.includes('increase case');
-      });
-      if (caseBtn) { caseBtn.b.click(); return 'case+'; }
-    }
-    var singleBtn = labeled.find(function(x) {
-      return x.l.includes('increment single') || x.l.includes('increase single');
-    });
-    if (singleBtn) { singleBtn.b.click(); return 'single+'; }
-    var anyBtn = labeled.find(function(x) {
-      return x.l.includes('increment') || x.l.includes('increase');
-    });
-    if (anyBtn) { anyBtn.b.click(); return anyBtn.l; }
-    var plusBtns = btns.filter(function(b) { return b.textContent.trim() === '+'; });
-    if (preferCase && plusBtns.length >= 2) { plusBtns[1].click(); return 'plus-2nd'; }
-    if (plusBtns.length >= 1) { plusBtns[0].click(); return 'plus-1st'; }
-    return 'none';
-  }, preferCase);
+// Score how well a cart item name matches an ordered item name.
+function scoreMatch(cartText, itemName) {
+  var t = cartText.toLowerCase();
+  var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
+    return w.length >= 3 && ['lbs', 'pkg', 'and', 'the', 'for', 'all', 'out', 'can', 'dry'].indexOf(w) === -1;
+  });
+  var priority = words.filter(function(w) { return w.length >= 6; });
+  var score = 0;
+  words.forEach(function(w) { if (t.includes(w)) score++; });
+  priority.forEach(function(w) { if (t.includes(w)) score += 3; });
+  return score;
 }
 
-async function hasCaseButton(page) {
+// Read all current cart items: name and current qty.
+async function readCartItems(page) {
   return await page.evaluate(function() {
-    var modalRoot = (
-      document.querySelector('[role="dialog"]') ||
-      document.querySelector('[class*="modal" i]') ||
-      document.querySelector('[class*="drawer" i]') ||
-      document
-    );
-    var btns = Array.from(modalRoot.querySelectorAll('button'));
-    return btns.some(function(b) {
-      var l = (b.getAttribute('aria-label') || '').toLowerCase();
-      return l.includes('increment case') || l.includes('increase case');
+    var results = [];
+
+    // Broad net — cart rows vary by site but always contain buttons
+    var candidates = Array.from(document.querySelectorAll(
+      '[class*="cart-item"], [class*="CartItem"], [class*="line-item"], ' +
+      '[class*="LineItem"], [class*="product-item"], article, li'
+    ));
+
+    candidates.forEach(function(el) {
+      if (!el.querySelector('button')) return;
+      var text = (el.textContent || '').trim();
+      if (text.length < 5 || text.length > 3000) return;
+
+      // Try input field for qty first, then scan spans for a lone integer
+      var qty = null;
+      var input = el.querySelector('input[type="number"], input[inputmode="numeric"]');
+      if (input) {
+        qty = parseInt(input.value, 10);
+      } else {
+        var spans = Array.from(el.querySelectorAll('span, div, p, td'));
+        for (var i = 0; i < spans.length; i++) {
+          var t = (spans[i].textContent || '').trim();
+          if (/^\d+$/.test(t) && parseInt(t, 10) > 0 && parseInt(t, 10) < 1000) {
+            qty = parseInt(t, 10);
+            break;
+          }
+        }
+      }
+
+      // Prefer a heading/title element for the name; fall back to first line of text
+      var titleEl = el.querySelector(
+        'h1, h2, h3, h4, h5, [class*="title" i], [class*="name" i], [class*="product" i], [class*="description" i]'
+      );
+      var name = titleEl ? titleEl.textContent.trim() : text.split('\n')[0].trim();
+
+      if (name && qty !== null && !isNaN(qty)) {
+        results.push({ name: name, qty: qty });
+      }
+    });
+
+    // Deduplicate by name (keep first occurrence)
+    var seen = {};
+    return results.filter(function(r) {
+      if (seen[r.name]) return false;
+      seen[r.name] = true;
+      return true;
     });
   });
 }
 
-// FIX 2: Wait for the modal to fully close before moving on to the next item.
-// The original bug: after clicking "Update guide", the code did a fixed
-// waitForTimeout(1500) but didn't verify the modal actually disappeared.
-// The next item's stepper clicks then landed on the still-visible modal.
-async function waitForModalClose(page) {
-  for (var i = 0; i < 25; i++) {
-    await page.waitForTimeout(300);
-    var isOpen = await page.evaluate(function() {
-      var btns = Array.from(document.querySelectorAll('button'));
-      return btns.some(function(b) {
-        var l = (b.getAttribute('aria-label') || '').toLowerCase();
-        return l.includes('increment') || l.includes('increase');
-      });
+// Click a +, -, or Remove button scoped to the cart row for itemName.
+async function clickCartButton(page, itemName, direction) {
+  return await page.evaluate(function(itemName, direction) {
+    var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
+      return w.length >= 3;
     });
-    if (!isOpen) {
-      await page.waitForTimeout(300); // one extra tick for DOM to settle
-      return;
-    }
-  }
-  // Force close if still open after timeout
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(600);
+
+    // Find the cart row with the best keyword match
+    var candidates = Array.from(document.querySelectorAll(
+      '[class*="cart-item"], [class*="CartItem"], [class*="line-item"], ' +
+      '[class*="LineItem"], [class*="product-item"], article, li'
+    ));
+    var bestEl = null, bestScore = 0;
+    candidates.forEach(function(el) {
+      if (!el.querySelector('button')) return;
+      var text = (el.textContent || '').toLowerCase();
+      var score = words.filter(function(w) { return text.includes(w); }).length;
+      if (score > bestScore) { bestScore = score; bestEl = el; }
+    });
+
+    if (!bestEl || bestScore === 0) return 'no-match';
+
+    // Find the right button within that row
+    var btns = Array.from(bestEl.querySelectorAll('button, a'));
+    var btn = btns.find(function(b) {
+      var label = (b.getAttribute('aria-label') || '').toLowerCase();
+      var txt   = (b.textContent || '').trim().toLowerCase();
+      if (direction === 'increment') return label.includes('increment') || label.includes('increase') || txt === '+';
+      if (direction === 'decrement') return label.includes('decrement') || label.includes('decrease') || txt === '-';
+      if (direction === 'remove')    return label.includes('remove') || txt === 'remove';
+      return false;
+    });
+
+    if (!btn) return 'no-button';
+    btn.click();
+    return 'ok';
+  }, itemName, direction);
 }
 
-// ── ITEM ADDER ───────────────────────────────────────────────────────────────
-
-async function addItem(page, item) {
-  var isSingle = SINGLE_ONLY_ITEMS.indexOf(item.item) !== -1;
-  var caseSize = CASE_SIZES[item.item] || 1;
-  console.log('\n[' + item.item + '] qty=' + item.quantity + ' single=' + isSingle + ' caseSize=' + caseSize);
-
-  // Ensure any previous modal is fully closed before starting
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(500);
-  await waitForModalClose(page);
-
-  // Find and click the best-matching "Add" button for this item
-  var matched = await page.evaluate(function(itemName) {
-    var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
-      return w.length >= 3 && ['lbs', 'pkg', 'and', 'the', 'for', 'all', 'out', 'can', 'dry', 'qty', 'per'].indexOf(w) === -1;
-    });
-    var priority = words.filter(function(w) { return w.length >= 6; });
-    var best = null, bestScore = 0;
-    var buttons = Array.from(document.querySelectorAll('button'));
-    for (var i = 0; i < buttons.length; i++) {
-      var btn = buttons[i];
-      var label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (!label) continue;
-      var score = 0;
-      for (var j = 0; j < words.length; j++) { if (label.includes(words[j])) score++; }
-      for (var k = 0; k < priority.length; k++) { if (label.includes(priority[k])) score += 3; }
-      if (score > bestScore) { bestScore = score; best = btn; }
-    }
-    if (best && bestScore > 0) { best.click(); return best.getAttribute('aria-label'); }
-    return null;
-  }, item.item);
-
-  if (!matched) { console.log('  NOT FOUND'); return false; }
-  console.log('  Matched: ' + matched);
-
-  // Wait for a modal to appear
-  var modalType = null;
-  for (var attempt = 0; attempt < 20; attempt++) {
-    await page.waitForTimeout(400);
-    modalType = await page.evaluate(function() {
-      var modalRoot = (
-        document.querySelector('[role="dialog"]') ||
-        document.querySelector('[class*="modal" i]') ||
-        document.querySelector('[class*="drawer" i]') ||
-        document
-      );
-      var btns = Array.from(modalRoot.querySelectorAll('button'));
-      var labels = btns.map(function(b) { return (b.getAttribute('aria-label') || '').toLowerCase(); });
-      if (labels.some(function(l) { return l.includes('increment'); })) return 'stepper';
-      var opts = Array.from(document.querySelectorAll('[role="option"]'));
-      if (opts.some(function(o) { return /^\d+$/.test(o.textContent.trim()); })) return 'listbox';
-      if (document.querySelector('select')) return 'dropdown';
-      return null;
-    });
-    if (modalType) break;
+// Bring a cart item from currentQty to targetQty using + or -.
+async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
+  var delta = targetQty - currentQty;
+  if (delta === 0) {
+    console.log('  [=] ' + itemName + ' already at ' + targetQty);
+    return true;
   }
-  console.log('  Modal: ' + modalType);
-  if (!modalType) { console.log('  Modal never appeared'); return false; }
 
-  // FIX 3: Verify the open modal is for THIS item before touching any steppers.
-  // The original bug: the flowers modal would stay open; the next item's button
-  // click was registered but the modal that was visible still belonged to flowers.
-  // clickIncrementButton then clicked the flowers stepper for carrots, lemons, mint.
-  if (modalType === 'stepper') {
-    var itemWords = item.item.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
-      return w.length >= 4;
-    });
-    var correctModal = await page.evaluate(function(words) {
-      var modalRoot = (
-        document.querySelector('[role="dialog"]') ||
-        document.querySelector('[class*="modal" i]') ||
-        document.querySelector('[class*="drawer" i]') ||
-        document
-      );
-      var btns = Array.from(modalRoot.querySelectorAll('button'));
-      var labels = btns.map(function(b) { return (b.getAttribute('aria-label') || '').toLowerCase(); });
-      var incrementLabels = labels.filter(function(l) { return l.includes('increment'); });
-      // At least one keyword from the item name must appear in the stepper labels
-      return words.some(function(w) {
-        return incrementLabels.some(function(l) { return l.includes(w); });
-      });
-    }, itemWords);
+  var direction = delta > 0 ? 'increment' : 'decrement';
+  var clicks = Math.abs(delta);
+  console.log('  [' + direction + '] ' + itemName + ': ' + currentQty + ' → ' + targetQty + ' (' + clicks + ' clicks)');
 
-    if (!correctModal) {
-      console.log('  WRONG MODAL — closing and skipping');
-      await page.keyboard.press('Escape');
-      await waitForModalClose(page);
+  for (var i = 0; i < clicks; i++) {
+    var result = await clickCartButton(page, itemName, direction);
+    if (result !== 'ok') {
+      console.log('  WARNING: ' + direction + ' failed (' + result + ') on click ' + (i + 1));
       return false;
     }
-  }
-
-  // ── SET QUANTITY ──────────────────────────────────────────────────────────
-
-  if (modalType === 'listbox') {
-    var listResult = await page.evaluate(function(qty) {
-      var options = Array.from(document.querySelectorAll('[role="option"]'));
-      var target = options.find(function(o) { return o.textContent.trim() === String(qty); });
-      if (target) { target.click(); return 'selected ' + qty; }
-      var custom = options.find(function(o) { return o.textContent.toLowerCase().includes('custom'); });
-      if (custom) { custom.click(); return 'custom'; }
-      return 'not found';
-    }, item.quantity);
-    console.log('  Listbox: ' + listResult);
-
-    if (listResult === 'custom') {
-      await page.waitForTimeout(500);
-      var numInput = await page.$('input[type="number"], input[inputmode="numeric"]');
-      if (numInput) {
-        await numInput.fill(String(item.quantity));
-        await numInput.dispatchEvent('change');
-      }
-    }
     await page.waitForTimeout(600);
-
-  } else if (modalType === 'dropdown') {
-    await page.evaluate(function(qty) {
-      var sel = document.querySelector('select');
-      if (sel) { sel.value = String(qty); sel.dispatchEvent(new Event('change', { bubbles: true })); }
-    }, item.quantity);
-    console.log('  Dropdown: set to ' + item.quantity);
-    await page.waitForTimeout(600);
-
-  } else {
-    // STEPPER — decide how many times to click and which button to use
-    var useCaseBtn = false;
-    var clickCount = item.quantity;
-
-    if (isSingle) {
-      useCaseBtn = false;
-      clickCount = item.quantity;
-    } else {
-      var caseExists = await hasCaseButton(page);
-      if (caseExists) {
-        useCaseBtn = true;
-        clickCount = item.quantity;
-      } else {
-        useCaseBtn = false;
-        clickCount = item.quantity * caseSize;
-      }
-    }
-
-    console.log('  Stepper: useCaseBtn=' + useCaseBtn + ' clicks=' + clickCount);
-    for (var i = 0; i < clickCount; i++) {
-      var result = await clickIncrementButton(page, useCaseBtn);
-      console.log('  [' + (i + 1) + '/' + clickCount + '] ' + result);
-      await page.waitForTimeout(700);
-    }
   }
-
-  // ── CONFIRM ───────────────────────────────────────────────────────────────
-  // FIX 4: Give the UI more time to update the button text before we read it,
-  // and increase retry count. The original bug: for many items the "Add N items
-  // to cart" button hadn't updated from 0 yet when we first checked, so we fell
-  // through to "Update guide" — which saves to the order guide but never adds
-  // to cart. That's why Yogurt (4→1), Chicken Breasts (3→1), Flour (5→1),
-  // Rice (4→1), and Fry Oil (2→1) all showed wrong quantities.
-  await page.waitForTimeout(1200);
-  var confirmed = null;
-  for (var confirmTry = 0; confirmTry < 5; confirmTry++) {
-    if (confirmTry > 0) {
-      console.log('  Confirm retry ' + confirmTry);
-      await page.waitForTimeout(1200);
-    }
-    confirmed = await page.evaluate(function() {
-      // Reverse so we find the modal button (near bottom of DOM) before the
-      // order guide bulk button (near top of page).
-      var btns = Array.from(document.querySelectorAll('button')).reverse();
-      var cartBtns = btns.filter(function(b) { return /to cart|update/i.test(b.textContent); });
-      var labels = cartBtns.map(function(b) { return b.textContent.trim(); }).join(' | ');
-      console.log('CART_BTNS:' + labels);
-
-      // Priority 1: "Add N items to cart" where N > 0 and is not the bulk button
-      // (bulk button typically says "Add 54 items to cart" or similar large number)
-      for (var i = 0; i < cartBtns.length; i++) {
-        var m = cartBtns[i].textContent.match(/Add (\d+)/i);
-        if (m && +m[1] > 0 && +m[1] < 50) { cartBtns[i].click(); return cartBtns[i].textContent.trim(); }
-      }
-      // Priority 2: Plain "Add to cart" (no number) — means item being added fresh
-      var plain = btns.find(function(b) { return /^add to cart$/i.test(b.textContent.trim()); });
-      if (plain) { plain.click(); return 'Add to cart'; }
-      // Priority 3: "Update guide" — only as last resort; this saves to the order
-      // guide but does NOT add to cart. We log a warning so it's visible.
-      var upd = btns.find(function(b) {
-        return /update guide/i.test(b.textContent) && !/add \d+ items/i.test(b.textContent);
-      });
-      if (upd) { upd.click(); return 'UPDATE_GUIDE_ONLY:' + upd.textContent.trim(); }
-      return null;
-    });
-    // If we got a real cart confirmation (not just guide update), break immediately
-    if (confirmed && !confirmed.startsWith('UPDATE_GUIDE_ONLY:')) break;
-    // If only "Update guide" was available, keep retrying to see if "Add to cart" appears
-    if (confirmed && confirmed.startsWith('UPDATE_GUIDE_ONLY:')) {
-      console.log('  WARNING: Only "Update guide" found on try ' + (confirmTry + 1) + ' — retrying for Add to cart');
-      confirmed = null; // reset and retry
-    }
-  }
-
-  // FIX 5: If we exhausted retries and never got "Add to cart", that item was NOT
-  // added to cart. Log it clearly and return false so it goes in the notFound list.
-  if (!confirmed) {
-    console.log('  FAILED: No add-to-cart button found after retries');
-    await page.keyboard.press('Escape');
-    await waitForModalClose(page);
-    return false;
-  }
-  if (confirmed.startsWith('UPDATE_GUIDE_ONLY:')) {
-    console.log('  WARNING: Item saved to order guide only, not added to cart: ' + confirmed);
-    await waitForModalClose(page);
-    return false; // treat as failure so caller includes it in notFound
-  }
-
-  console.log('  Confirmed: ' + confirmed);
-
-  // FIX 6: Wait for modal to fully close before moving to the next item.
-  await waitForModalClose(page);
   return true;
 }
 
-// ── ORDER PLACER ─────────────────────────────────────────────────────────────
+// Remove a cart item that isn't in the order.
+async function removeCartItem(page, cartName) {
+  console.log('  [x] Remove: ' + cartName);
+
+  var result = await clickCartButton(page, cartName, 'remove');
+
+  // Fallback: walk up from a Remove button near the item text
+  if (result !== 'ok') {
+    result = await page.evaluate(function(cartName) {
+      var words = cartName.toLowerCase().split(' ').filter(function(w) { return w.length >= 4; });
+      var allBtns = Array.from(document.querySelectorAll('button, a'));
+      for (var i = 0; i < allBtns.length; i++) {
+        var b = allBtns[i];
+        var label = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
+        if (!label.includes('remove')) continue;
+        var parent = b.parentElement;
+        for (var depth = 0; depth < 7; depth++) {
+          if (!parent) break;
+          var pText = (parent.textContent || '').toLowerCase();
+          if (words.some(function(w) { return pText.includes(w); })) {
+            b.click();
+            return 'ok-fallback';
+          }
+          parent = parent.parentElement;
+        }
+      }
+      return 'failed';
+    }, cartName);
+  }
+
+  console.log('    Remove result: ' + result);
+  await page.waitForTimeout(1500); // Let the row disappear from the DOM
+  return result === 'ok' || result === 'ok-fallback';
+}
+
+// ── MAIN FLOW ─────────────────────────────────────────────────────────────────
 
 async function placeOrder(orderItems) {
+  // Pre-compute target cart quantities.
+  // Cart quantities are always in individual units, so we multiply cases × caseSize.
+  // Single-only items are ordered in units already.
+  var targetMap = {};
+  orderItems.forEach(function(oi) {
+    var isSingle  = SINGLE_ONLY_ITEMS.indexOf(oi.item) !== -1;
+    var caseSize  = CASE_SIZES[oi.item] || 1;
+    var targetQty = isSingle ? oi.quantity : oi.quantity * caseSize;
+    targetMap[oi.item] = { ordered: oi, targetQty: targetQty, found: false };
+    console.log('Target | ' + oi.item + ': ordered=' + oi.quantity + ' caseSize=' + caseSize + ' cartQty=' + targetQty);
+  });
+
   var browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   var context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   });
   var page = await context.newPage();
-  page.on('console', function(m) {
-    if (m.text().startsWith('CART_BTNS:')) console.log('  BROWSER: ' + m.text());
-  });
 
   try {
-    // LOGIN
-    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // ── LOGIN ──────────────────────────────────────────────────────────────────
+    await page.goto(
+      'https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F',
+      { waitUntil: 'domcontentloaded', timeout: 30000 }
+    );
     await page.waitForTimeout(5000);
     await page.waitForSelector('#email', { timeout: 30000 });
     await page.fill('#email', process.env.RD_EMAIL);
@@ -474,14 +363,14 @@ async function placeOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in');
 
-    // CLEAR CART
+    // ── CLEAR EXISTING CART ────────────────────────────────────────────────────
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
-    for (var i = 0; i < 60; i++) {
+    for (var i = 0; i < 80; i++) {
       var removed = await page.evaluate(function() {
-        var els = Array.from(document.querySelectorAll('button, [role="button"]'));
+        var els = Array.from(document.querySelectorAll('button, [role="button"], a'));
         var btn = els.find(function(b) {
-          var txt = (b.textContent || '').trim().toLowerCase();
+          var txt  = (b.textContent || '').trim().toLowerCase();
           var aria = (b.getAttribute('aria-label') || '').toLowerCase();
           if (aria.includes('wishlist') || aria.includes('saved')) return false;
           return txt === 'remove' || aria.includes('remove') || (b.innerHTML || '').toLowerCase().includes('trash');
@@ -494,25 +383,71 @@ async function placeOrder(orderItems) {
     }
     console.log('Cart cleared');
 
-    // LOAD ORDER GUIDE
-    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // ── LOAD ORDER GUIDE AND BULK-ADD EVERYTHING ───────────────────────────────
+    await page.goto(
+      'https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',
+      { waitUntil: 'domcontentloaded', timeout: 30000 }
+    );
     await page.waitForTimeout(6000);
-    var btnCount = await page.evaluate(function() {
-      return document.querySelectorAll('button[aria-label]').length;
-    });
-    console.log('Order guide loaded - ' + btnCount + ' buttons');
 
-    // PROCESS ITEMS
-    var notFound = [];
-    for (var j = 0; j < orderItems.length; j++) {
-      var ok = await addItem(page, orderItems[j]);
-      if (!ok) notFound.push(orderItems[j].item);
+    var bulkLabel = await page.evaluate(function() {
+      var btns = Array.from(document.querySelectorAll('button'));
+      // The bulk button says "Add 54 items to cart" (or similar large count)
+      var bulk = btns.find(function(b) {
+        var m = b.textContent.match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
+        return m && parseInt(m[1], 10) >= 10;
+      });
+      if (bulk) { bulk.click(); return bulk.textContent.trim(); }
+      return null;
+    });
+
+    if (!bulkLabel) {
+      throw new Error('Could not find bulk "Add all to cart" button on order guide page');
+    }
+    console.log('Bulk add: ' + bulkLabel);
+    await page.waitForTimeout(6000); // Wait for the full cart to populate
+
+    // ── GO TO CART ─────────────────────────────────────────────────────────────
+    await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(4000);
+
+    var cartItems = await readCartItems(page);
+    console.log('Cart loaded: ' + cartItems.length + ' items');
+    cartItems.forEach(function(ci) { console.log('  cart | ' + ci.name + ' qty=' + ci.qty); });
+
+    // ── MATCH AND ADJUST ───────────────────────────────────────────────────────
+    // For every item in the cart:
+    //   - If it matches something we ordered → adjust quantity to target
+    //   - If it doesn't → remove it
+    for (var c = 0; c < cartItems.length; c++) {
+      var cartItem = cartItems[c];
+
+      // Find the highest-scoring match in our ordered items
+      var bestKey = null, bestScore = 0;
+      Object.keys(targetMap).forEach(function(key) {
+        var s = scoreMatch(cartItem.name, key);
+        if (s > bestScore) { bestScore = s; bestKey = key; }
+      });
+
+      if (!bestKey || bestScore === 0) {
+        // Item is in the order guide but not in today's order — remove it
+        await removeCartItem(page, cartItem.name);
+      } else {
+        // Item is ordered — adjust qty
+        var entry = targetMap[bestKey];
+        entry.found = true;
+        await adjustCartItemQty(page, bestKey, cartItem.qty, entry.targetQty);
+      }
     }
 
-    // FIX 7: Log actual failures accurately. The original code printed
-    // "Not found: none" even when Cauliflower hit NOT FOUND in the log,
-    // because addItem() was returning true in some failure paths.
-    console.log('Done. Not found: ' + (notFound.length ? notFound.join(', ') : 'none'));
+    // ── REPORT ITEMS FROM ORDER NOT FOUND IN CART ──────────────────────────────
+    // These were in the WhatsApp order but never appeared after the bulk add,
+    // meaning they aren't in the order guide yet. Flag for manual add.
+    var notFound = Object.keys(targetMap).filter(function(key) {
+      return !targetMap[key].found;
+    });
+
+    console.log('Done. Not in guide: ' + (notFound.length ? notFound.join(', ') : 'none'));
     await browser.close();
     return { success: true, notFound: notFound };
 
@@ -523,11 +458,11 @@ async function placeOrder(orderItems) {
   }
 }
 
-// ── WHATSAPP WEBHOOK ─────────────────────────────────────────────────────────
+// ── WHATSAPP WEBHOOK ──────────────────────────────────────────────────────────
 
 app.post('/whatsapp', async function(req, res) {
   res.sendStatus(200);
-  var msg = req.body.Body;
+  var msg  = req.body.Body;
   var from = req.body.From.replace('whatsapp:', '');
   var name = from === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
   console.log('From ' + name + ': ' + msg);
@@ -546,14 +481,15 @@ app.post('/whatsapp', async function(req, res) {
       return;
     }
 
-    var summary = order.map(function(i) { return '* ' + i.quantity + 'x ' + i.item; }).join('\n');
+    var summary = order.map(function(i) { return '• ' + i.quantity + 'x ' + i.item; }).join('\n');
     await sendWhatsApp(from, 'Adding to cart:\n\n' + summary);
 
     var result = await placeOrder(order);
     if (result.success) {
-      var reply = 'Done! Checkout:\nmember.restaurantdepot.com/store/business/cart';
+      var reply = 'Done! Review and checkout:\nmember.restaurantdepot.com/store/business/cart';
       if (result.notFound && result.notFound.length) {
-        reply += '\n\nNot added — needs manual fix:\n' + result.notFound.map(function(n) { return '• ' + n; }).join('\n');
+        reply += '\n\nNot in order guide — add manually:\n' +
+          result.notFound.map(function(n) { return '• ' + n; }).join('\n');
       }
       await sendWhatsApp(from, reply);
       await sendEmail(order, name);
