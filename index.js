@@ -175,7 +175,7 @@ async function placeRestaurantDepotOrder(orderItems) {
     for (const item of orderItems) {
       console.log(`Adding: ${item.item} x${item.quantity}`);
 
-      const result = await page.evaluate((itemName, qty) => {
+      const result = await page.evaluate(({ itemName, qty }) => {
         const searchWords = itemName.toLowerCase()
           .replace(/[^a-z0-9 ]/g, ' ')
           .split(' ')
@@ -199,7 +199,7 @@ async function placeRestaurantDepotOrder(orderItems) {
           return { found: true, label: bestBtn.getAttribute('aria-label'), score: bestScore };
         }
         return { found: false, searched: searchWords };
-      }, item.item, item.quantity);
+      }, { itemName: item.item, qty: item.quantity });
 
       if (result.found) {
         console.log(`Clicked: ${result.label}`);
