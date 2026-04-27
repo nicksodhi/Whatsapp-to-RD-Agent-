@@ -65,6 +65,7 @@ const ITEM_MAP = {
   "corn starch": "Clabber Girl Cornstarch - 3 lbs",
   "cornstarch": "Clabber Girl Cornstarch - 3 lbs",
   "rice": "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
+  "royal rice": "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
   "basmati rice": "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
   "garbanzo": "Chef's Quality - Garbanzo Beans - #10 can",
   "red kidney": "Chef's Quality - Dark Red Kidney Beans - #10 cans",
@@ -106,9 +107,12 @@ Use this item mapping to convert the order to exact Restaurant Depot item names:
 ${itemMapStr}
 
 Rules:
-- Match each item in the order to the closest key in the map above
+- ONLY add items that are EXPLICITLY listed in the order with a quantity number
+- Match each item to the closest key in the map above
 - The quantity in the order = number of cases/units to add to cart
-- Skip items with no match (Cauliflower, Carrots, Lemon, Mint, Green Onions, Fresh Spinach, Green Bell Pepper, Green Chiles, Serrano Peppers, Lemon Juice, Ketchup, Vinegar, Coca-Cola, Fanta, Indian store spices, disposables, cleaning supplies)
+- If an item is NOT in the order, do NOT add it - even if it seems related
+- Skip items not in the map (Cauliflower, Carrots, Lemon, Mint, Lemon Juice, Ketchup, Vinegar, Coca-Cola, Fanta, Indian spices, disposables)
+- NEVER add Lamb, Goat, Cheese, Diet Coke, Cilantro, Spinach, Broccoli, or Red Food Coloring unless explicitly in the order
 - Return ONLY a JSON array, no markdown, no explanation
 
 Format: [{"item": "EXACT item name from map values", "quantity": NUMBER}]
