@@ -145,20 +145,30 @@ async function addItem(page, item) {
 
   // Find matching Add button on order guide
   const found = await page.evaluate(({ itemName }) => {
+    // Use longer, more distinctive words (4+ chars) for matching to avoid false matches
+    // e.g. "bag" in "Russet Potato 50 lb Bag" should NOT match "Bagged Cilantro"
     const searchWords = itemName.toLowerCase()
       .replace(/[^a-z0-9 ]/g, ' ')
       .split(' ')
-      .filter(w => w.length > 2);
+      .filter(w => w.length >= 4);  // Only words 4+ chars
+
+    // Also create high-priority words (6+ chars) that score extra
+    const priorityWords = searchWords.filter(w => w.length >= 6);
 
     const buttons = Array.from(document.querySelectorAll('button[aria-label*="Add"]'));
     let bestBtn = null;
-    let bestScore = 0;
+    let bestScore = -1;
 
     for (const btn of buttons) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      const score = searchWords.filter(w => label.includes(w)).length;
-      if (score > bestScore) {
-        bestScore = score;
+      // Regular word score
+      const regularScore = searchWords.filter(w => label.includes(w)).length;
+      // Priority word score (weighted 3x)
+      const priorityScore = priorityWords.filter(w => label.includes(w)).length * 3;
+      const totalScore = regularScore + priorityScore;
+      
+      if (totalScore > bestScore) {
+        bestScore = totalScore;
         bestBtn = btn;
       }
     }
@@ -287,10 +297,10 @@ async function addItem(page, item) {
 
   const confirmed = await page.evaluate(({ qty }) => {
     const btns = Array.from(document.querySelectorAll('button'));
-    const cartBtns = btns.filter(b => b.textContent.toLowerCase().includes('to cart'));
+    const cartBtns = btns.filter(b => b.textContent.toLowerCase().includes('to cart') || b.textContent.toLowerCase().includes('update'));
     console.log('Cart buttons found:', cartBtns.map(b => b.textContent.trim()).join(' | '));
 
-    // Find the modal confirm button - must have count > 0 and < 50
+    // Find the modal confirm button - count > 0 and < 50
     for (const btn of cartBtns) {
       const text = btn.textContent.trim();
       const match = text.match(/Add (\d+) items? to cart/i);
@@ -300,9 +310,13 @@ async function addItem(page, item) {
       }
     }
 
-    // Fallback: plain "Add to cart" (no number)
-    const plainBtn = cartBtns.find(b => /^add to cart$/i.test(b.textContent.trim()) && !b.disabled);
-    if (plainBtn) { plainBtn.click(); return plainBtn.textContent.trim(); }
+    // Plain "Add to cart"
+    const plainBtn = cartBtns.find(b => /^add to cart$/i.test(b.textContent.trim()));
+    if (plainBtn) { plainBtn.click(); return 'Add to cart'; }
+
+    // "Update cart" for items already in cart
+    const updateBtn = cartBtns.find(b => b.textContent.toLowerCase().includes('update'));
+    if (updateBtn) { updateBtn.click(); return updateBtn.textContent.trim(); }
 
     return null;
   }, { qty: item.quantity });
