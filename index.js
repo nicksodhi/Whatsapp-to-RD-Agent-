@@ -109,7 +109,7 @@ async function parseOrder(message) {
   
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001', // Restored your working model!
       max_tokens: 1000,
       messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
 
