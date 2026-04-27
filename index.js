@@ -24,6 +24,58 @@ const transporter = nodemailer.createTransport({
   }
 });
 
+// Complete Naan & Curry order guide - exact item names from Restaurant Depot
+const ORDER_GUIDE = [
+  "Isabella - Petite Diced Tomatoes -#10 cans",
+  "Chef's Quality - Tomato Sauce - #10 cans",
+  "Chef's Quality - Liquid Butter Alternative - gallon",
+  "Chef's Quality - All Purpose Pan Spray - 17 oz",
+  "Chef's Quality - 100% Canola Salad Oil - 35 lbs",
+  "Chef's Quality - Soybean Salad Oil - 35 lbs",
+  "Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs",
+  "Athena - Fire Roasted Grilled Eggplant Pulp - 2 kg",
+  "Chef's Quality - Garbanzo Beans - #10 can",
+  "Chef's Quality - Dark Red Kidney Beans - #10 cans",
+  "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
+  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz",
+  "Felbro - Red Food Coloring - gallon",
+  "Morton - Purex Salt - 50lb",
+  "C&H - Granulated Sugar - 25 lbs",
+  "Clabber Girl - Baking Powder - 5 lbs",
+  "Clabber Girl Cornstarch - 3 lbs",
+  "Golden Temple - Durum Atta Flour - 2/20 lb Bag",
+  "Sprite Bottles, 16.9 fl oz, 4 Pack",
+  "Diet Coke Bottles, 16.9 fl oz, 24 Pack",
+  "Royal Mahout - Paneer Loaf - 5 lbs",
+  "James Farm - Shredded Cheddar Jack Cheese - 5 lbs",
+  "MILK WHL GAL GS/AN",
+  "Royal - Chef's Secret Sela Basmati Rice - 40 lbs",
+  "James Farm - Heavy Cream, 40% - 64 oz",
+  "James Farm - Plain Yogurt - 32 lbs",
+  "Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs",
+  "Frozen James Farm - Frozen Chopped Spinach - 3 lbs",
+  "Frozen James Farm - IQF Broccoli Florets - 2 lbs",
+  "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs",
+  "Frozen James Farm - IQF Peas - 2.5 lbs",
+  "Serrano Peppers",
+  "Fresh Ginger - 30 lbs",
+  "Peeled Garlic",
+  "Cucumbers - 6 ct",
+  "Taylor Farms - Bagged Cilantro",
+  "Micro Orchid Flowers - 4 oz",
+  "Russet Potato - 50 lb Bag, 6oz Min, US #2",
+  "Jumbo Red Onions - 25 lbs",
+  "Jumbo Spanish Onions - 50 lbs",
+  "Jumbo Chicken Party Wings (6-8 ct)",
+  "Fresh Chicken Leg Quarters - 40 lbs",
+  "Boneless, Skinless Jumbo Chicken Thighs",
+  "Frozen Boneless, Skinless Chicken Thigh Meat, 15% - 40 lbs",
+  "Frozen Boneless, Skinless Chicken Leg Meat, Marinated - 40 lbs",
+  "Frozen Halal Boneless Lamb Leg, Australia",
+  "Evian - Natural Spring Water, 24 Ct, 500 mL",
+  "Thomas Farms - Bone in Goat Cube - #15"
+];
+
 async function parseOrder(message) {
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
@@ -32,22 +84,26 @@ async function parseOrder(message) {
       role: 'user',
       content: `You are a restaurant ordering assistant for Naan & Curry, an Indian fast-casual restaurant in Las Vegas.
 
-Parse this WhatsApp message into a structured order list. The person may text in any casual format.
+Here is the EXACT list of items in the Naan & Curry order guide at Restaurant Depot:
+${ORDER_GUIDE.map((item, i) => `${i + 1}. ${item}`).join('\n')}
+
+The person will text you an order in casual language. Your job is to:
+1. Match what they said to the closest item(s) in the order guide above
+2. Return a JSON array with the exact item name from the list and the quantity
 
 Examples:
-- "order 6 yellow onions" -> [{"item": "yellow onions", "quantity": 6}]
-- "10 lbs chicken tikka and 2 cases naan" -> [{"item": "chicken tikka", "quantity": 10}, {"item": "naan", "quantity": 2}]
-- "need some paneer" -> [{"item": "paneer", "quantity": 1}]
+- "6 yellow onions" -> [{"item": "Jumbo Spanish Onions - 50 lbs", "quantity": 6}]
+- "need some paneer" -> [{"item": "Royal Mahout - Paneer Loaf - 5 lbs", "quantity": 1}]
+- "10 lbs chicken and 2 bags rice" -> [{"item": "Fresh Chicken Leg Quarters - 40 lbs", "quantity": 1}, {"item": "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs", "quantity": 2}]
+- "garlic and ginger" -> [{"item": "Peeled Garlic", "quantity": 1}, {"item": "Fresh Ginger - 30 lbs", "quantity": 1}]
 
 Rules:
-- quantity is always a whole number
-- if no quantity mentioned, use 1
-- always return valid JSON array
-- never return an error unless message has nothing to do with food
+- Always use the EXACT item name from the list above
+- If no quantity mentioned, use 1
+- Match the closest item even if phrased differently
+- Return ONLY a JSON array, no explanation, no markdown
 
-Message: "${message}"
-
-Return ONLY a JSON array, no explanation, no markdown.`
+Message: "${message}"`
     }]
   });
 
@@ -73,8 +129,8 @@ async function sendConfirmationEmail(orderItems, sender) {
   await transporter.sendMail({
     from: process.env.GMAIL_ADDRESS,
     to: [process.env.YOUR_EMAIL, process.env.RAHUL_EMAIL].join(','),
-    subject: `✅ Restaurant Depot Order Placed - ${new Date().toLocaleDateString()}`,
-    text: `A Restaurant Depot pickup order was placed by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nOrder placed at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\nLocation: Naan & Curry, Las Vegas\n\nThis is an automated confirmation from your Naan & Curry ordering agent.`
+    subject: `✅ Restaurant Depot Order Added to Cart - ${new Date().toLocaleDateString()}`,
+    text: `Items were added to the Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout here (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart\n\nThis is an automated message from your Naan & Curry ordering agent.`
   });
 }
 
@@ -91,15 +147,13 @@ async function placeRestaurantDepotOrder(orderItems) {
 
   try {
     // Login
-    console.log('Navigating to Restaurant Depot login...');
+    console.log('Logging in to Restaurant Depot...');
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
     });
     await page.waitForTimeout(5000);
-
     await page.waitForSelector('#email', { timeout: 30000 });
-    console.log('Email field found, filling in credentials...');
     await page.fill('#email', process.env.RD_EMAIL);
     await page.waitForTimeout(500);
     await page.fill('input[type="password"]', process.env.RD_PASSWORD);
@@ -108,80 +162,66 @@ async function placeRestaurantDepotOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in successfully');
 
-    // Go directly to Naan & Curry order guide
-    console.log('Going to Naan & Curry order guide...');
+    // Go to order guide
+    console.log('Loading Naan & Curry order guide...');
     await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
     });
     await page.waitForTimeout(5000);
-    console.log('Order guide loaded');
 
-    // Process each item
+    // Get all Add buttons and their labels
+    const buttons = await page.$$('button[aria-label*="Add"]');
+    const buttonMap = [];
+    for (const btn of buttons) {
+      const label = await btn.getAttribute('aria-label');
+      if (label) buttonMap.push({ label: label.toLowerCase(), btn });
+    }
+    console.log(`Found ${buttonMap.length} items in order guide`);
+
+    // Add each ordered item
     for (const item of orderItems) {
-      console.log(`Looking for: ${item.item} (qty: ${item.quantity})`);
-      try {
-        // Find all "Add" buttons and match by aria-label containing item name
-        const itemName = item.item.toLowerCase();
-        
-        // Get all add buttons on page
-        const addButtons = await page.$$('button[aria-label*="Add"]');
-        let found = false;
+      console.log(`Looking for: ${item.item}`);
+      const searchWords = item.item.toLowerCase()
+        .replace(/[^a-z0-9 ]/g, ' ')
+        .split(' ')
+        .filter(w => w.length > 3);
 
-        for (const btn of addButtons) {
-          const label = await btn.getAttribute('aria-label');
-          if (label && label.toLowerCase().includes(itemName.split(' ')[0])) {
-            console.log(`Found item: ${label}`);
-            await btn.click();
-            await page.waitForTimeout(2000);
+      let bestMatch = null;
+      let bestScore = 0;
 
-            // If quantity > 1, click + button additional times
-            if (item.quantity > 1) {
-              for (let i = 1; i < item.quantity; i++) {
-                const plusBtn = await page.$('button[aria-label*="Increase"], button:has-text("+")');
-                if (plusBtn) {
-                  await plusBtn.click();
-                  await page.waitForTimeout(500);
-                }
-              }
-            }
-            found = true;
-            break;
+      for (const { label, btn } of buttonMap) {
+        const score = searchWords.filter(word => label.includes(word)).length;
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = { label, btn };
+        }
+      }
+
+      if (bestMatch && bestScore > 0) {
+        console.log(`Matched to: ${bestMatch.label}`);
+        await bestMatch.btn.click();
+        await page.waitForTimeout(2000);
+
+        // Click + for additional quantities
+        for (let i = 1; i < item.quantity; i++) {
+          const plusBtn = await page.$('button[aria-label*="Increase"], button[aria-label*="increment"]');
+          if (plusBtn) {
+            await plusBtn.click();
+            await page.waitForTimeout(400);
           }
         }
-
-        if (!found) {
-          console.log(`Item not found in order guide: ${item.item}`);
-        }
-
-      } catch (err) {
-        console.log(`Error adding ${item.item}: ${err.message}`);
+      } else {
+        console.log(`Could not find: ${item.item}`);
       }
     }
 
-    console.log('All items processed, going to cart for pickup...');
-    
-    // Go to cart and select pickup
-    await page.goto('https://member.restaurantdepot.com/store/business/cart', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    });
-    await page.waitForTimeout(3000);
-
-    // Select pickup option if available
-    const pickupBtn = await page.$('button:has-text("Pickup"), input[value="pickup"], label:has-text("Pickup")');
-    if (pickupBtn) {
-      await pickupBtn.click();
-      await page.waitForTimeout(1000);
-      console.log('Pickup selected');
-    }
-
-    console.log('Order added to cart successfully');
+    console.log('All items added to cart');
     await browser.close();
     return { success: true };
 
   } catch (error) {
-    console.error('Browser error:', error.message);
+    console.error('Error:', error.message);
     await browser.close();
     return { success: false, error: error.message };
   }
@@ -197,35 +237,35 @@ app.post('/whatsapp', async (req, res) => {
   console.log(`Message from ${senderName}: ${incomingMsg}`);
 
   if (!AUTHORIZED_NUMBERS.includes(fromNumber)) {
-    await sendWhatsApp(fromNumber, '❌ Sorry, you are not authorized to place orders.');
+    await sendWhatsApp(fromNumber, '❌ Not authorized.');
     return;
   }
 
-  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Looking up your order now...`);
+  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Matching your order to the Naan & Curry order guide...`);
 
   try {
     const parsedOrder = await parseOrder(incomingMsg);
 
     if (parsedOrder.error) {
-      await sendWhatsApp(fromNumber, `❓ I couldn't understand that. Try:\n\n"6 yellow onions, 10 lbs chicken tikka, 2 cases naan"`);
+      await sendWhatsApp(fromNumber, `❓ Couldn't understand that. Try:\n"6 yellow onions, 2 paneer, 1 chicken"`);
       return;
     }
 
     const orderSummary = parsedOrder.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
-    await sendWhatsApp(fromNumber, `📋 Order:\n\n${orderSummary}\n\nLogging into Restaurant Depot and adding to your cart...`);
+    await sendWhatsApp(fromNumber, `📋 Adding to cart:\n\n${orderSummary}\n\nLogging into Restaurant Depot now...`);
 
     const result = await placeRestaurantDepotOrder(parsedOrder);
 
     if (result.success) {
-      await sendWhatsApp(fromNumber, `🎉 Items added to your cart on Restaurant Depot!\n\nLog in to confirm pickup and checkout:\nhttps://member.restaurantdepot.com/store/business/cart\n\nConfirmation email sent to you and Rahul.`);
+      await sendWhatsApp(fromNumber, `🎉 Items added to your cart!\n\nCheckout here and select Pickup:\nhttps://member.restaurantdepot.com/store/business/cart\n\nEmail confirmation sent to you and Rahul.`);
       await sendConfirmationEmail(parsedOrder, senderName);
     } else {
-      await sendWhatsApp(fromNumber, `⚠️ Couldn't add items automatically.\n\nError: ${result.error}\n\nPlease add manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
+      await sendWhatsApp(fromNumber, `⚠️ Issue adding items.\n\nError: ${result.error}\n\nOrder manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
     }
 
   } catch (error) {
     console.error('Error:', error);
-    await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Please order manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
+    await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Order manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
   }
 });
 
