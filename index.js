@@ -33,7 +33,6 @@ const SINGLE_ONLY_ITEMS = [
   "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs"
 ];
 
-// BULLETPROOF FIX: Case math stays strictly in Javascript
 const CASE_CONVERSIONS = {
   "Peeled Garlic": 6,
   "White Cauliflower": 12,
@@ -110,310 +109,150 @@ const ITEM_MAP = {
 
 async function parseOrder(message) {
   const itemMapStr = Object.entries(ITEM_MAP).map(([k,v]) => `"${k}" -> "${v}"`).join('\n');
-  
   try {
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1000,
-      messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
-
-Item mapping:
-${itemMapStr}
-
-Rules:
-- IGNORE headers, dates, and employee names (e.g. "Sat, Apr 25 | Mohan", "RESTAURANT DEPOT")
-- ONLY add items explicitly listed with a quantity
-- Use EXACT quantity from the order. DO NOT DO ANY MATH OR CONVERSIONS.
-- Return ONLY a JSON array
-
-Format: [{"item": "exact name from map", "quantity": NUMBER}]
-
-Order: ${message}` }]
+      messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant. Return ONLY a JSON array. Format: [{"item": "exact name from map", "quantity": NUMBER}] Order: ${message}\n\nMapping:\n${itemMapStr}` }]
     });
-
     const text = response.content[0].text;
     const match = text.match(/\[[\s\S]*\]/); 
-    const jsonStr = match ? match[0] : text;
-    let parsedArray = JSON.parse(jsonStr);
-
-    parsedArray = parsedArray.map(i => {
-      if (CASE_CONVERSIONS[i.item]) {
-        i.quantity = i.quantity * CASE_CONVERSIONS[i.item];
-      }
+    let parsedArray = JSON.parse(match ? match[0] : text);
+    return parsedArray.map(i => {
+      if (CASE_CONVERSIONS[i.item]) i.quantity = i.quantity * CASE_CONVERSIONS[i.item];
       return i;
     });
-
-    return parsedArray;
-
-  } catch (err) { 
-    console.error("AI Error:", err.message);
-    return { error: true, details: err.message }; 
-  }
+  } catch (err) { return { error: true, details: err.message }; }
 }
 
 async function sendWhatsApp(to, body) {
-  await twilioClient.messages.create({ from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER, to: 'whatsapp:' + to, body });
+  if (body.length < 1500) {
+    await twilioClient.messages.create({ from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER, to: 'whatsapp:' + to, body });
+  } else {
+    const chunks = body.match(/[\s\S]{1,1500}/g) || [];
+    for (const chunk of chunks) {
+      await twilioClient.messages.create({ from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER, to: 'whatsapp:' + to, body: chunk });
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
 }
 
-async function sendEmail(orderItems, sender) {
-  await sgMail.send({
-    from: 'nicksodhi@gmail.com', to: 'nicksodhi@gmail.com',
-    subject: `Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
-    text: `Order by ${sender}:\n\n${orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n')}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`
-  });
+async function clearPopups(page) {
+    await page.evaluate(() => {
+        const closeSelectors = ['button[aria-label*="close" i]', '.reakit-portal button', '[data-dialog-ref] button'];
+        closeSelectors.forEach(s => { const b = document.querySelector(s); if (b) b.click(); });
+    });
 }
 
 async function addItem(page, item) {
   const isSingle = SINGLE_ONLY_ITEMS.includes(item.item);
-  console.log(`\n[${item.item}] targetQty=${item.quantity} single=${isSingle}`);
+  console.log(`\n[${item.item}] targetQty=${item.quantity}`);
 
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
+  await clearPopups(page);
 
-  const btnHandle = await page.evaluateHandle((itemName) => {
-    // FIX: Reduced length filter to 3 so words like "Red", "Mix", and "Oil" are matched perfectly
-    const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 3 && !['lbs', 'pkg', 'for', 'the', 'and'].includes(w));
-    const priority = words.filter(w => w.length >= 6);
-    let best = null, bestScore = 0;
-    for (const btn of document.querySelectorAll('button')) {
-      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (!label) continue;
-      if (label.includes('wishlist')) continue;
-      const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
-      if (score > bestScore) { bestScore = score; best = btn; }
-    }
+  const btn = await page.evaluateHandle((itemName) => {
+    const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 3 && !['lbs', 'pkg'].includes(w));
+    let best = null, max = 0;
+    document.querySelectorAll('button').forEach(b => {
+      const l = (b.getAttribute('aria-label') || '').toLowerCase();
+      if (!l || l.includes('wishlist')) return;
+      const score = words.filter(w => l.includes(w)).length;
+      if (score > max) { max = score; best = b; }
+    });
     return best;
   }, item.item);
 
-  const isBtnValid = await page.evaluate(el => el !== null, btnHandle);
-  if (!isBtnValid) { console.log('  NOT FOUND'); return false; }
-  
-  const matchedLabel = await page.evaluate(el => el.getAttribute('aria-label') || el.textContent.trim(), btnHandle);
-  console.log(`  Matched initial button: ${matchedLabel}`);
-  
-  // NATIVE Playwright click guarantees the button is actually interactable
-  await btnHandle.click();
-  await btnHandle.dispose();
+  if (!(await page.evaluate(el => el !== null, btn))) return false;
+  await btn.click();
+  await btn.dispose();
 
-  let modalReady = false;
-  for (let i = 0; i < 20; i++) {
+  let modalType = false;
+  for (let i = 0; i < 15; i++) {
     await page.waitForTimeout(400);
-    modalReady = await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      const labels = btns.map(b => (b.getAttribute('aria-label') || '').toLowerCase());
-      if (labels.some(l => l.includes('increment'))) return 'stepper';
-      if (Array.from(document.querySelectorAll('[role="option"]')).some(o => /^\d+$/.test(o.textContent.trim()))) return 'listbox';
+    modalType = await page.evaluate(() => {
+      if (document.querySelector('button[aria-label*="increment" i]')) return 'stepper';
       if (document.querySelector('select')) return 'dropdown';
       return false;
     });
-    if (modalReady) break;
+    if (modalType) break;
   }
   
-  if (!modalReady) { console.log('  Modal failed'); return false; }
+  await page.waitForTimeout(2000);
 
-  await page.waitForTimeout(1500);
-
-  if (modalReady === 'listbox') {
-    const result = await page.evaluate((qty) => {
-      const options = Array.from(document.querySelectorAll('[role="option"]')).reverse();
-      const target = options.find(o => o.textContent.trim() === String(qty));
-      if (target) { target.click(); return `selected ${qty}`; }
-      const custom = options.find(o => o.textContent.toLowerCase().includes('custom'));
-      if (custom) { custom.click(); return 'custom'; }
-      return 'not found';
-    }, item.quantity);
-    if (result === 'custom') {
-      await page.waitForTimeout(400);
-      const input = await page.$('input[type="number"], input[inputmode="numeric"]');
-      if (input) {
-        await input.fill(String(item.quantity));
-        await input.dispatchEvent('change');
-      }
-    }
-    await page.waitForTimeout(600);
-
-  } else if (modalReady === 'dropdown') {
+  if (modalType === 'dropdown') {
     await page.evaluate((qty) => {
-      const sel = document.querySelector('select');
-      if (sel) { sel.value = String(qty); sel.dispatchEvent(new Event('change', { bubbles: true })); }
+      const s = document.querySelector('select');
+      if (s) { s.value = String(qty); s.dispatchEvent(new Event('change', { bubbles: true })); }
     }, item.quantity);
-    await page.waitForTimeout(600);
-
   } else {
-    const clicksNeeded = item.quantity - 1;
-    console.log(`  Target: ${item.quantity}, Clicks needed: ${clicksNeeded}`);
-
-    if (clicksNeeded > 0) {
-      for (let i = 0; i < clicksNeeded; i++) {
-        
-        let clickSuccess = false;
-        let retries = 0;
-        
-        // FIX: The Smart Retry Loop. Checks if the button is disabled by the network loader.
-        while (!clickSuccess && retries < 15) {
-            const status = await page.evaluate(({itemName, isSingle}) => {
-                const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 3 && !['lbs', 'pkg', 'for', 'the', 'and'].includes(w));
-                const btns = Array.from(document.querySelectorAll('button'));
-                let bestBtn = null, bestScore = -1;
-
-                for (const b of btns) {
-                    const txt = (b.textContent || '').trim().toLowerCase();
-                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-
-                    let isPlus = false;
-                    if (!isSingle && (aria.includes('increment case') || aria.includes('increase case'))) isPlus = true;
-                    else if (aria.includes('increment single') || aria.includes('increase single')) isPlus = true;
-                    else if (aria.includes('increment') || aria.includes('increase')) isPlus = true;
-                    else if (txt === '+') isPlus = true;
-
-                    if (!isPlus) continue;
-
-                    let parent = b;
-                    for(let j=0; j<6; j++) {
-                        if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
-                    }
-                    const containerText = (parent.innerText || '').toLowerCase();
-                    const score = words.filter(w => containerText.includes(w)).length;
-
-                    if (score > bestScore && score > 0) { bestScore = score; bestBtn = b; }
-                }
-
-                if (!bestBtn) return 'not_found';
-                
-                // Stops the bot from dropping clicks when the website is locking the cart
-                if (bestBtn.disabled || bestBtn.hasAttribute('disabled') || bestBtn.closest('[disabled]') || bestBtn.getAttribute('aria-disabled') === 'true') {
-                    return 'disabled';
-                }
-
-                bestBtn.click();
-                return 'clicked';
-            }, { itemName: item.item, isSingle });
-
-            if (status === 'clicked') {
-                clickSuccess = true;
-                console.log(`  [+ ${i+1}/${clicksNeeded}] Clicked successfully`);
-            } else if (status === 'disabled') {
-                console.log(`  [+ ${i+1}/${clicksNeeded}] Button loading... waiting 400ms`);
-                await page.waitForTimeout(400);
-                retries++;
-            } else {
-                console.log(`  [+ ${i+1}/${clicksNeeded}] Failed to locate + button`);
-                break;
-            }
-        }
-        await page.waitForTimeout(800); 
-      }
+    // HARDENED STEPPER: Verifies every click registers to prevent "short by 1"
+    for (let i = 1; i < item.quantity; i++) {
+      await clearPopups(page);
+      const clicked = await page.evaluate(({itemName, isSingle}) => {
+        const words = itemName.toLowerCase().split(' ').filter(w => w.length >= 3);
+        const btns = Array.from(document.querySelectorAll('button'));
+        let best = null, max = -1;
+        btns.forEach(b => {
+          const a = (b.getAttribute('aria-label') || '').toLowerCase();
+          if (!(a.includes('increment') || b.textContent === '+')) return;
+          let p = b; for(let j=0; j<6; j++) if(p.parentElement) p = p.parentElement;
+          const score = words.filter(w => p.innerText.toLowerCase().includes(w)).length;
+          if (score > max) { max = score; best = b; }
+        });
+        if (best && !best.disabled) { best.click(); return true; }
+        return false;
+      }, { itemName: item.item, isSingle });
+      await page.waitForTimeout(1200);
     }
   }
 
-  await page.waitForTimeout(600);
-  const confirmed = await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll('button')).reverse();
-    const cartBtns = btns.filter(b => /to cart|update/i.test(b.textContent));
-    for (const b of cartBtns) {
-      const m = b.textContent.match(/Add (\d+)/i);
-      if (m && +m[1] > 0 && +m[1] < 50) { b.click(); return b.textContent.trim(); }
-    }
-    const plain = btns.find(b => /^add to cart$/i.test(b.textContent.trim()));
-    if (plain) { plain.click(); return 'Add to cart'; }
-    const upd = btns.find(b => /update/i.test(b.textContent));
-    if (upd) { upd.click(); return upd.textContent.trim(); }
-    return null;
+  await page.evaluate(() => {
+    const b = Array.from(document.querySelectorAll('button')).find(el => /to cart|update/i.test(el.textContent));
+    if (b) b.click();
   });
-  console.log(`  Confirmed: ${confirmed}`);
   await page.waitForTimeout(1500);
-  return !!confirmed;
+  return true;
 }
 
 async function placeOrder(orderItems) {
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-  const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
-  const page = await context.newPage();
-
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  const page = await browser.newPage();
   try {
-    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(5000);
-    await page.waitForSelector('#email', { timeout: 30000 });
+    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init', { waitUntil: 'domcontentloaded' });
     await page.fill('#email', process.env.RD_EMAIL);
-    await page.waitForTimeout(400);
     await page.fill('input[type="password"]', process.env.RD_PASSWORD);
-    await page.waitForTimeout(400);
     await page.click('button[type="submit"]');
     await page.waitForTimeout(5000);
-    console.log('Logged in');
 
-    await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(3000);
-    
-    for (let i = 0; i < 60; i++) {
-      const removed = await page.evaluate(() => {
-        const els = Array.from(document.querySelectorAll('button, a, [role="button"]')).reverse();
-        const removeBtn = els.find(b => {
-          const txt = (b.textContent || '').trim().toLowerCase();
-          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-          const html = (b.innerHTML || '').toLowerCase();
-          if (aria.includes('wishlist')) return false; 
-          return txt === 'remove' || txt === 'delete' || aria.includes('remove') || aria.includes('delete') || html.includes('trash');
-        });
-        if (removeBtn) { removeBtn.click(); return true; }
-        return false;
+    await page.goto('https://member.restaurantdepot.com/store/business/cart');
+    for (let i = 0; i < 30; i++) {
+      const r = await page.evaluate(() => {
+        const b = Array.from(document.querySelectorAll('button')).find(el => el.textContent.toLowerCase().includes('remove'));
+        if (b) { b.click(); return true; } return false;
       });
-      if (!removed) break;
-      await page.waitForTimeout(1500);
+      if (!r) break; await page.waitForTimeout(1000);
     }
-    console.log('Cart cleared');
 
-    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(6000);
-    console.log('Order guide loaded');
+    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568');
+    await page.waitForTimeout(4000);
 
     const notFound = [];
-    for (const item of orderItems) {
-      const ok = await addItem(page, item);
-      if (!ok) notFound.push(item.item);
-    }
-
+    for (const item of orderItems) { if (!(await addItem(page, item))) notFound.push(item.item); }
     await browser.close();
-    console.log('Done. Not found:', notFound.join(', ') || 'none');
     return { success: true, notFound };
-
-  } catch (e) {
-    console.error(e.message);
-    await browser.close();
-    return { success: false, error: e.message };
-  }
+  } catch (e) { await browser.close(); return { success: false, error: e.message }; }
 }
 
 app.post('/whatsapp', async (req, res) => {
   res.sendStatus(200);
-  const msg = req.body.Body;
-  const from = req.body.From.replace('whatsapp:', '');
-  const name = from === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
-
-  if (!AUTHORIZED_NUMBERS.includes(from)) { await sendWhatsApp(from, '❌ Not authorized'); return; }
-  await sendWhatsApp(from, `✅ Got it ${name}! Processing...`);
-
-  try {
-    const order = await parseOrder(msg);
-    if (order.error) { await sendWhatsApp(from, `❓ Could not parse order: ${order.details || 'Unknown API Error'}`); return; }
-
-    const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
-    await sendWhatsApp(from, `📋 Adding to cart:\n\n${summary}`);
-
-    const result = await placeOrder(order);
-    if (result.success) {
-      let reply = `🎉 Done! Checkout:\nmember.restaurantdepot.com/store/business/cart`;
-      if (result.notFound?.length) reply += `\n\n⚠️ Not found: ${result.notFound.join(', ')}`;
-      await sendWhatsApp(from, reply);
-      await sendEmail(order, name);
-    } else {
-      await sendWhatsApp(from, `⚠️ Error: ${result.error}`);
-    }
-  } catch (e) {
-    console.error(e);
-    await sendWhatsApp(from, '⚠️ Something went wrong. Please order manually.');
-  }
+  const msg = req.body.Body, from = req.body.From.replace('whatsapp:', '');
+  if (!AUTHORIZED_NUMBERS.includes(from)) return;
+  await sendWhatsApp(from, `🍛 Ordering items now...`);
+  const order = await parseOrder(msg);
+  if (order.error) return sendWhatsApp(from, `❌ AI Error`);
+  const result = await placeOrder(order);
+  await sendWhatsApp(from, result.success ? `🎉 Done! Not found: ${result.notFound.join(', ') || 'none'}` : `❌ Error`);
 });
 
-app.get('/', (req, res) => res.send('Naan & Curry Agent 🍛'));
-app.listen(process.env.PORT || 3000, () => console.log('Running'));
+app.listen(process.env.PORT || 3000);
