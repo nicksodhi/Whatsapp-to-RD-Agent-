@@ -93,8 +93,7 @@ async function parseOrder(message) {
   
   try {
     const response = await anthropic.messages.create({
-      // FIX 1: Using the stable, fast Haiku model so it doesn't crash
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 1000,
       messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
 
@@ -112,7 +111,6 @@ Format: [{"item": "exact name from map", "quantity": NUMBER}]
 Order: ${message}` }]
     });
 
-    // FIX 2: Robust JSON extractor prevents conversational text from breaking the parser
     const text = response.content[0].text;
     const match = text.match(/\[[\s\S]*\]/); 
     const jsonStr = match ? match[0] : text;
@@ -143,7 +141,6 @@ async function addItem(page, item) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(300);
 
-  // Find best matching Add button
   const found = await page.evaluate((itemName) => {
     const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
     const priority = words.filter(w => w.length >= 6);
@@ -177,7 +174,6 @@ async function addItem(page, item) {
   
   if (!modalReady) { console.log('  Modal failed'); return false; }
 
-  // FIX 3: 1.5 second mandatory breath so the site doesn't swallow clicks
   await page.waitForTimeout(1500);
 
   if (modalReady === 'listbox') {
@@ -207,7 +203,6 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    // FIX 4: Loop starts at 1 because cart is completely empty, meaning modal defaults to 1
     for (let i = 1; i < item.quantity; i++) {
       const clicked = await page.evaluate((isSingle) => {
         const btns = Array.from(document.querySelectorAll('button'));
@@ -272,13 +267,11 @@ async function placeOrder(orderItems) {
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
     
-    // FIX 5: Bulletproof native Playwright locators for Cart Clearing.
-    // This finds ANY button containing the word "Remove" (e.g. "Replace with best match 🗑️ Remove")
     let removeBtns = page.locator('button:has-text("Remove")');
     while (await removeBtns.count() > 0) {
       await removeBtns.first().click();
       await page.waitForTimeout(1500);
-      removeBtns = page.locator('button:has-text("Remove")'); // Refresh locator count
+      removeBtns = page.locator('button:has-text("Remove")'); 
     }
     console.log('Cart cleared');
 
@@ -314,7 +307,6 @@ app.post('/whatsapp', async (req, res) => {
 
   try {
     const order = await parseOrder(msg);
-    // Updated error text so you get detailed AI feedback if it ever fails
     if (order.error) { await sendWhatsApp(from, `❓ Could not parse order: ${order.details || 'Unknown API Error'}`); return; }
 
     const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
