@@ -24,81 +24,83 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-const ORDER_GUIDE = [
-  "Isabella - Petite Diced Tomatoes -#10 cans",
-  "Chef's Quality - Tomato Sauce - #10 cans",
-  "Chef's Quality - Liquid Butter Alternative - gallon",
-  "Chef's Quality - All Purpose Pan Spray - 17 oz",
-  "Chef's Quality - 100% Canola Salad Oil - 35 lbs",
-  "Chef's Quality - Soybean Salad Oil - 35 lbs",
-  "Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs",
-  "Athena - Fire Roasted Grilled Eggplant Pulp - 2 kg",
-  "Chef's Quality - Garbanzo Beans - #10 can",
-  "Chef's Quality - Dark Red Kidney Beans - #10 cans",
-  "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
-  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz",
-  "Felbro - Red Food Coloring - gallon",
-  "Morton - Purex Salt - 50lb",
-  "C&H - Granulated Sugar - 25 lbs",
-  "Clabber Girl - Baking Powder - 5 lbs",
-  "Clabber Girl Cornstarch - 3 lbs",
-  "Golden Temple - Durum Atta Flour - 2/20 lb Bag",
-  "Sprite Bottles, 16.9 fl oz, 4 Pack",
-  "Diet Coke Bottles, 16.9 fl oz, 24 Pack",
-  "Royal Mahout - Paneer Loaf - 5 lbs",
-  "James Farm - Shredded Cheddar Jack Cheese - 5 lbs",
-  "MILK WHL GAL GS/AN",
-  "Royal - Chef's Secret Sela Basmati Rice - 40 lbs",
-  "James Farm - Heavy Cream, 40% - 64 oz",
-  "James Farm - Plain Yogurt - 32 lbs",
-  "Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs",
-  "Frozen James Farm - Frozen Chopped Spinach - 3 lbs",
-  "Frozen James Farm - IQF Broccoli Florets - 2 lbs",
-  "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs",
-  "Frozen James Farm - IQF Peas - 2.5 lbs",
-  "Serrano Peppers",
-  "Fresh Ginger - 30 lbs",
-  "Peeled Garlic",
-  "Cucumbers - 6 ct",
-  "Taylor Farms - Bagged Cilantro",
-  "Micro Orchid Flowers - 4 oz",
-  "Russet Potato - 50 lb Bag, 6oz Min, US #2",
-  "Jumbo Red Onions - 25 lbs",
-  "Jumbo Spanish Onions - 50 lbs",
-  "Jumbo Chicken Party Wings (6-8 ct)",
-  "Fresh Chicken Leg Quarters - 40 lbs",
-  "Boneless, Skinless Jumbo Chicken Thighs",
-  "Frozen Boneless, Skinless Chicken Thigh Meat, 15% - 40 lbs",
-  "Frozen Boneless, Skinless Chicken Leg Meat, Marinated - 40 lbs",
-  "Frozen Halal Boneless Lamb Leg, Australia",
-  "Evian - Natural Spring Water, 24 Ct, 500 mL",
-  "Thomas Farms - Bone in Goat Cube - #15"
-];
+// Complete Naan & Curry order guide with case notes
+const ORDER_GUIDE = `
+1. Isabella - Petite Diced Tomatoes -#10 cans
+2. Chef's Quality - Tomato Sauce - #10 cans
+3. Chef's Quality - Liquid Butter Alternative - gallon (ORDER CASE)
+4. Chef's Quality - All Purpose Pan Spray - 17 oz
+5. Chef's Quality - 100% Canola Salad Oil - 35 lbs
+6. Chef's Quality - Soybean Salad Oil - 35 lbs
+7. Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs (ORDER CASE = Fryer Oil)
+8. Athena - Fire Roasted Grilled Eggplant Pulp - 2 kg
+9. Chef's Quality - Garbanzo Beans - #10 can
+10. Chef's Quality - Dark Red Kidney Beans - #10 cans
+11. Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs (= Rice Royal)
+12. Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz (= Sambal Chili Jar, ORDER CASE)
+13. Felbro - Red Food Coloring - gallon
+14. Morton - Purex Salt - 50lb
+15. C&H - Granulated Sugar - 25 lbs
+16. Clabber Girl - Baking Powder - 5 lbs
+17. Clabber Girl Cornstarch - 3 lbs
+18. Golden Temple - Durum Atta Flour - 2/20 lb Bag (= All Purpose Flour)
+19. Sprite Bottles, 16.9 fl oz, 4 Pack (ORDER CASE)
+20. Diet Coke Bottles, 16.9 fl oz, 24 Pack
+21. Royal Mahout - Paneer Loaf - 5 lbs (ORDER CASE = 4 blocks)
+22. James Farm - Shredded Cheddar Jack Cheese - 5 lbs
+23. MILK WHL GAL GS/AN (ORDER CASE = 4 gallons)
+24. Royal - Chef's Secret Sela Basmati Rice - 40 lbs
+25. James Farm - Heavy Cream, 40% - 64 oz (ORDER CASE)
+26. James Farm - Plain Yogurt - 32 lbs (= Yogurt)
+27. Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs
+28. Frozen James Farm - Frozen Chopped Spinach - 3 lbs
+29. Frozen James Farm - IQF Broccoli Florets - 2 lbs
+30. Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs (= Frozen 4-Way Mix)
+31. Frozen James Farm - IQF Peas - 2.5 lbs
+32. Serrano Peppers
+33. Fresh Ginger - 30 lbs (= Ginger)
+34. Peeled Garlic (= Garlic)
+35. Cucumbers - 6 ct
+36. Taylor Farms - Bagged Cilantro
+37. Micro Orchid Flowers - 4 oz (= Flowers/garnish)
+38. Russet Potato - 50 lb Bag, 6oz Min, US #2 (= Potato)
+39. Jumbo Red Onions - 25 lbs (= Red Onions)
+40. Jumbo Spanish Onions - 50 lbs
+41. Jumbo Chicken Party Wings (6-8 ct) (= Chicken Wings, ORDER CASE)
+42. Fresh Chicken Leg Quarters - 40 lbs (= Chicken Leg Quarters bone-in)
+43. Boneless, Skinless Jumbo Chicken Thighs (= Chicken Breast substitute)
+44. Frozen Boneless, Skinless Chicken Thigh Meat, 15% - 40 lbs
+45. Frozen Boneless, Skinless Chicken Leg Meat, Marinated - 40 lbs (= Chicken Leg Meat)
+46. Frozen Halal Boneless Lamb Leg, Australia
+47. Evian - Natural Spring Water, 24 Ct, 500 mL
+48. Thomas Farms - Bone in Goat Cube - #15
+`;
 
 async function parseOrder(message) {
   const response = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1000,
+    max_tokens: 2000,
     messages: [{
       role: 'user',
-      content: `You are a restaurant ordering assistant for Naan & Curry, an Indian fast-casual restaurant in Las Vegas.
+      content: `You are an ordering assistant for Naan & Curry, an Indian restaurant in Las Vegas. 
 
-Here is the EXACT list of items in the Naan & Curry order guide at Restaurant Depot:
-${ORDER_GUIDE.map((item, i) => `${i + 1}. ${item}`).join('\n')}
+Here is the Restaurant Depot order guide with item mappings:
+${ORDER_GUIDE}
 
-The person will text you an order in casual language. Match what they said to the closest item(s) in the list above.
+IMPORTANT RULES:
+- When an item says "ORDER CASE", always add it as a case (the quantity in the order IS the number of cases)
+- Match casual chef language to the exact item name in the guide
+- "Chicken Breast" → use "Boneless, Skinless Jumbo Chicken Thighs" (closest match)
+- "Lemon Juice" → not in guide, skip it
+- "Cauliflower", "Carrots", "Lemon", "Mint" → not in guide, skip them
+- If item is not in the guide, skip it silently
+- The quantity in the order = number of units/cases to add to cart
+- Return ONLY a JSON array, no markdown, no explanation
 
-Examples:
-- "6 yellow onions" -> [{"item": "Jumbo Spanish Onions - 50 lbs", "quantity": 6}]
-- "need some paneer" -> [{"item": "Royal Mahout - Paneer Loaf - 5 lbs", "quantity": 1}]
-- "garlic and ginger" -> [{"item": "Peeled Garlic", "quantity": 1}, {"item": "Fresh Ginger - 30 lbs", "quantity": 1}]
+Format: [{"item": "EXACT item name from guide", "quantity": NUMBER}]
 
-Rules:
-- Always use the EXACT item name from the list
-- If no quantity mentioned, use 1
-- Return ONLY a JSON array, no explanation, no markdown
-
-Message: "${message}"`
+Order to parse:
+${message}`
     }]
   });
 
@@ -119,13 +121,14 @@ async function sendWhatsApp(to, message) {
   });
 }
 
-async function sendConfirmationEmail(orderItems, sender) {
+async function sendConfirmationEmail(orderItems, sender, skipped) {
   const orderList = orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
+  const skippedNote = skipped.length > 0 ? `\n\nSKIPPED (not in order guide):\n${skipped.map(s => `• ${s}`).join('\n')}` : '';
   await transporter.sendMail({
     from: process.env.GMAIL_ADDRESS,
     to: [process.env.YOUR_EMAIL, process.env.RAHUL_EMAIL].join(','),
     subject: `✅ Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
-    text: `Items added to Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart`
+    text: `Items added to Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}${skippedNote}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart`
   });
 }
 
@@ -141,7 +144,6 @@ async function placeRestaurantDepotOrder(orderItems) {
   const page = await context.newPage();
 
   try {
-    // Login
     console.log('Logging in...');
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', {
       waitUntil: 'domcontentloaded',
@@ -157,7 +159,6 @@ async function placeRestaurantDepotOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in successfully');
 
-    // Go to order guide
     console.log('Loading order guide...');
     await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', {
       waitUntil: 'domcontentloaded',
@@ -165,13 +166,11 @@ async function placeRestaurantDepotOrder(orderItems) {
     });
     await page.waitForTimeout(6000);
 
-    // Check how many buttons are on page
     const btnCount = await page.evaluate(() => {
       return document.querySelectorAll('button[aria-label*="Add"]').length;
     });
-    console.log(`Found ${btnCount} Add buttons on page`);
+    console.log(`Found ${btnCount} Add buttons`);
 
-    // Add each item using pure JavaScript - bypasses all overlays
     for (const item of orderItems) {
       console.log(`Adding: ${item.item} x${item.quantity}`);
 
@@ -196,33 +195,36 @@ async function placeRestaurantDepotOrder(orderItems) {
 
         if (bestBtn && bestScore > 0) {
           bestBtn.click();
-          return { found: true, label: bestBtn.getAttribute('aria-label'), score: bestScore };
+          return { found: true, label: bestBtn.getAttribute('aria-label') };
         }
-        return { found: false, searched: searchWords };
+        return { found: false };
       }, { itemName: item.item, qty: item.quantity });
 
       if (result.found) {
         console.log(`Clicked: ${result.label}`);
         await page.waitForTimeout(2000);
 
-        // Click + for additional quantities (Add button already added 1, so click + qty-1 more times)
-        const extraClicks = item.quantity - 1;
-        for (let i = 0; i < extraClicks; i++) {
+        // Click "Increment case quantity" button for total quantity times
+        // (first click on Add adds 0, then we click case + for each unit needed)
+        for (let i = 0; i < item.quantity; i++) {
           await page.evaluate(() => {
             const btns = Array.from(document.querySelectorAll('button'));
-            // Look for the increase/increment button that appears after clicking Add
-            const plusBtn = btns.find(b => {
+            // Prefer "Increment case quantity" button, fall back to any increment
+            const caseBtn = btns.find(b => {
               const label = (b.getAttribute('aria-label') || '').toLowerCase();
-              const text = b.textContent.trim();
-              return label.includes('increase') || label.includes('increment') || 
-                     (text === '+' && b.closest('[class*="stepper"], [class*="quantity"], [class*="counter"]'));
+              return label.includes('increment case') || label.includes('increase case');
             });
-            if (plusBtn) plusBtn.click();
+            const anyBtn = btns.find(b => {
+              const label = (b.getAttribute('aria-label') || '').toLowerCase();
+              return label.includes('increment') || label.includes('increase');
+            });
+            const btn = caseBtn || anyBtn;
+            if (btn) btn.click();
           });
           await page.waitForTimeout(600);
         }
       } else {
-        console.log(`Not found: ${item.item}, searched: ${JSON.stringify(result.searched)}`);
+        console.log(`Not found: ${item.item}`);
       }
     }
 
@@ -251,13 +253,13 @@ app.post('/whatsapp', async (req, res) => {
     return;
   }
 
-  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Processing your order...`);
+  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Processing order...`);
 
   try {
     const parsedOrder = await parseOrder(incomingMsg);
 
     if (parsedOrder.error) {
-      await sendWhatsApp(fromNumber, `❓ Try: "6 yellow onions, 2 paneer, 1 chicken"`);
+      await sendWhatsApp(fromNumber, `❓ Couldn't parse that order. Try forwarding the chef's list directly.`);
       return;
     }
 
@@ -267,8 +269,8 @@ app.post('/whatsapp', async (req, res) => {
     const result = await placeRestaurantDepotOrder(parsedOrder);
 
     if (result.success) {
-      await sendWhatsApp(fromNumber, `🎉 Done! Check your cart:\nmember.restaurantdepot.com/store/business/cart`);
-      await sendConfirmationEmail(parsedOrder, senderName);
+      await sendWhatsApp(fromNumber, `🎉 Done! Checkout:\nmember.restaurantdepot.com/store/business/cart`);
+      await sendConfirmationEmail(parsedOrder, senderName, []);
     } else {
       await sendWhatsApp(fromNumber, `⚠️ Error: ${result.error}\n\nOrder manually:\nmember.restaurantdepot.com/store/business/order-guide/19933806363004568`);
     }
