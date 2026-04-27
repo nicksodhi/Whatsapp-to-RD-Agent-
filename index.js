@@ -17,11 +17,21 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
+// Items that should be ordered as singles (not cases)
+// These use the single increment button or the single dropdown
+const SINGLE_ONLY_ITEMS = [
+  'Herb - Mint- 1lb',
+  'Micro Orchid Flowers - 4 oz',
+  'Taylor Farms - Bagged Cilantro',
+  'Lemons, 71-115 ct',
+  'Carrots- 10 lb',
+];
+
 const ITEM_MAP = {
   "yellow onions": "Jumbo Spanish Onions - 50 lbs",
   "red onions": "Jumbo Red Onions - 25 lbs",
-  "potato": "Russet Potato - 50 lb Bag, 6oz Min, US #2",
-  "potatoes": "Russet Potato - 50 lb Bag, 6oz Min, US #2",
+  "potato": "Potato - 50 lb", // Item 42725
+  "potatoes": "Potato - 50 lb",
   "garlic": "Peeled Garlic",
   "ginger": "Fresh Ginger - 30 lbs",
   "paneer": "Royal Mahout - Paneer Loaf - 5 lbs",
@@ -137,40 +147,26 @@ async function sendConfirmationEmail(orderItems, sender) {
 }
 
 async function addItem(page, item) {
-  console.log(`\n--- ${item.item} x${item.quantity} ---`);
+  const isSingleOnly = SINGLE_ONLY_ITEMS.includes(item.item);
+  console.log(`\n--- ${item.item} x${item.quantity} (${isSingleOnly ? 'single' : 'case'}) ---`);
 
-  // Close any open modal first by pressing Escape
+  // Press Escape to close any open modal
   await page.keyboard.press('Escape');
   await page.waitForTimeout(500);
 
-  // Find matching Add button on order guide
+  // Find and click the Add button using weighted word matching
   const found = await page.evaluate(({ itemName }) => {
-    // Use longer, more distinctive words (4+ chars) for matching to avoid false matches
-    // e.g. "bag" in "Russet Potato 50 lb Bag" should NOT match "Bagged Cilantro"
-    const searchWords = itemName.toLowerCase()
-      .replace(/[^a-z0-9 ]/g, ' ')
-      .split(' ')
-      .filter(w => w.length >= 4);  // Only words 4+ chars
-
-    // Also create high-priority words (6+ chars) that score extra
-    const priorityWords = searchWords.filter(w => w.length >= 6);
+    const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
+    const priorityWords = words.filter(w => w.length >= 6);
 
     const buttons = Array.from(document.querySelectorAll('button[aria-label*="Add"]'));
-    let bestBtn = null;
-    let bestScore = -1;
+    let bestBtn = null, bestScore = -1;
 
     for (const btn of buttons) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
-      // Regular word score
-      const regularScore = searchWords.filter(w => label.includes(w)).length;
-      // Priority word score (weighted 3x)
-      const priorityScore = priorityWords.filter(w => label.includes(w)).length * 3;
-      const totalScore = regularScore + priorityScore;
-      
-      if (totalScore > bestScore) {
-        bestScore = totalScore;
-        bestBtn = btn;
-      }
+      const score = words.filter(w => label.includes(w)).length
+                  + priorityWords.filter(w => label.includes(w)).length * 3;
+      if (score > bestScore) { bestScore = score; bestBtn = btn; }
     }
 
     if (bestBtn && bestScore > 0) {
@@ -180,146 +176,139 @@ async function addItem(page, item) {
     return null;
   }, { itemName: item.item });
 
-  if (!found) {
-    console.log(`  NOT FOUND`);
-    return false;
-  }
-  console.log(`  Opened: ${found.label}`);
+  if (!found) { console.log(`  NOT FOUND`); return false; }
+  console.log(`  Opened: ${found.label} (score:${found.score})`);
 
-  // Wait for modal UI to appear - check for either dropdown or +/- buttons
+  // Wait for modal to load — detect type
   let modalType = null;
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let i = 0; i < 20; i++) {
     await page.waitForTimeout(400);
     modalType = await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button'));
       const labels = btns.map(b => (b.getAttribute('aria-label') || '').toLowerCase());
-      
-      // Check for +/- style buttons
       if (labels.some(l => l.includes('increment case'))) return 'case-stepper';
-      if (labels.some(l => l.includes('increment single'))) return 'single-stepper';
+      if (labels.some(l => l.includes('increment single'))) return 'both-stepper';
       if (labels.some(l => l.includes('increment'))) return 'stepper';
-      const plusBtns = btns.filter(b => b.textContent.trim() === '+');
-      if (plusBtns.length > 0) return `plus-${plusBtns.length}`;
-      
-      // Check for dropdown selector (select element)
-      const selects = document.querySelectorAll('select');
-      if (selects.length > 0) return 'dropdown';
-      
-      // Check for listbox/dropdown items (1,2,3,4... list)
-      const listItems = document.querySelectorAll('[role="option"], [role="listitem"]');
-      if (listItems.length > 0) return 'listbox';
-
+      if (document.querySelectorAll('select').length > 0) return 'dropdown';
+      // Listbox: numbered list items 1,2,3...
+      const listItems = Array.from(document.querySelectorAll('[role="option"]'));
+      if (listItems.some(l => /^\d+$/.test(l.textContent.trim()))) return 'listbox';
       return null;
     });
     if (modalType) break;
   }
-  console.log(`  Modal type: ${modalType}`);
+  console.log(`  Modal: ${modalType}`);
+  if (!modalType) { console.log(`  Modal not loaded`); return false; }
 
-  if (!modalType) {
-    console.log(`  Modal never loaded`);
-    return false;
-  }
+  // === SET QUANTITY ===
+  if (modalType === 'listbox') {
+    // Numbered dropdown list — click the right number directly
+    // First check if the dropdown is already open, if not open it
+    const isOpen = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[role="option"]')).some(l => /^\d+$/.test(l.textContent.trim()))
+    );
 
-  // Handle quantity selection based modal type
-  if (modalType === 'dropdown') {
-    // Use HTML select element
-    const selected = await page.evaluate(({ qty }) => {
-      const selects = document.querySelectorAll('select');
-      if (selects.length > 0) {
-        // Find the case select if multiple, else use first
-        const sel = selects[selects.length > 1 ? 1 : 0];
+    if (!isOpen) {
+      // Click the quantity button to open the list
+      await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const qtyBtn = btns.find(b => /^\d+$/.test(b.textContent.trim()));
+        if (qtyBtn) qtyBtn.click();
+      });
+      await page.waitForTimeout(500);
+    }
+
+    // Click the right number
+    const clicked = await page.evaluate(({ qty }) => {
+      const options = Array.from(document.querySelectorAll('[role="option"]'));
+      const target = options.find(o => o.textContent.trim() === qty.toString());
+      if (target) { target.click(); return `selected ${qty}`; }
+      // If qty > 9, use Custom Amount
+      const custom = options.find(o => o.textContent.toLowerCase().includes('custom'));
+      if (custom) { custom.click(); return 'custom'; }
+      return 'not found';
+    }, { qty: item.quantity });
+    console.log(`  Listbox: ${clicked}`);
+
+    // If custom was clicked, type the value
+    if (clicked === 'custom') {
+      await page.waitForTimeout(500);
+      await page.evaluate(({ qty }) => {
+        const input = document.querySelector('input[type="number"], input[inputmode="numeric"]');
+        if (input) {
+          input.value = qty.toString();
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, { qty: item.quantity });
+    }
+    await page.waitForTimeout(500);
+
+  } else if (modalType === 'dropdown') {
+    // HTML select element
+    await page.evaluate(({ qty }) => {
+      const sel = document.querySelector('select');
+      if (sel) {
         sel.value = qty.toString();
         sel.dispatchEvent(new Event('change', { bubbles: true }));
-        return `dropdown set to ${qty}`;
       }
-      return 'no select found';
     }, { qty: item.quantity });
-    console.log(`  ${selected}`);
-    await page.waitForTimeout(1000);
-
-  } else if (modalType === 'listbox') {
-    // Click the dropdown trigger first, then select the right number
-    await page.evaluate(({ qty }) => {
-      // Click the quantity display to open dropdown
-      const btns = Array.from(document.querySelectorAll('button'));
-      const qtyBtn = btns.find(b => /^\d+$/.test(b.textContent.trim()) || b.textContent.trim() === '1');
-      if (qtyBtn) qtyBtn.click();
-    }, { qty: item.quantity });
-    await page.waitForTimeout(500);
-    
-    // Click the right number in the list
-    const clicked = await page.evaluate(({ qty }) => {
-      const options = Array.from(document.querySelectorAll('[role="option"], li'));
-      const target = options.find(o => o.textContent.trim() === qty.toString());
-      if (target) { target.click(); return `listbox selected ${qty}`; }
-      
-      // Try custom amount if number > 9
-      if (qty > 9) {
-        const custom = options.find(o => o.textContent.toLowerCase().includes('custom'));
-        if (custom) { custom.click(); return 'custom'; }
-      }
-      return 'not found in list';
-    }, { qty: item.quantity });
-    console.log(`  ${clicked}`);
+    console.log(`  Dropdown set to ${item.quantity}`);
     await page.waitForTimeout(500);
 
   } else {
-    // Stepper (+/-) buttons
+    // Stepper buttons (+/-)
     for (let i = 0; i < item.quantity; i++) {
-      const clicked = await page.evaluate(({ modalType }) => {
+      const clicked = await page.evaluate(({ isSingleOnly }) => {
         const btns = Array.from(document.querySelectorAll('button'));
-        const labels = btns.map(b => ({btn: b, label: (b.getAttribute('aria-label') || '').toLowerCase()}));
-        console.log('Increment buttons:', labels.filter(x => x.label.includes('increment')).map(x => x.label).join(' | '));
+        const labels = btns.map(b => ({ btn: b, label: (b.getAttribute('aria-label') || '').toLowerCase() }));
 
-        const caseBtn = labels.find(x => x.label.includes('increment case'));
-        if (caseBtn) { caseBtn.btn.click(); return 'case'; }
+        if (!isSingleOnly) {
+          const caseBtn = labels.find(x => x.label.includes('increment case'));
+          if (caseBtn) { caseBtn.btn.click(); return 'case+'; }
+        }
 
         const singleBtn = labels.find(x => x.label.includes('increment single'));
-        if (singleBtn) { singleBtn.btn.click(); return 'single'; }
+        if (singleBtn) { singleBtn.btn.click(); return 'single+'; }
 
-        const anyIncrement = labels.find(x => x.label.includes('increment') || x.label.includes('increase'));
-        if (anyIncrement) { anyIncrement.btn.click(); return anyIncrement.label; }
+        const anyBtn = labels.find(x => x.label.includes('increment') || x.label.includes('increase'));
+        if (anyBtn) { anyBtn.btn.click(); return anyBtn.label; }
 
         const plusBtns = btns.filter(b => b.textContent.trim() === '+');
-        if (plusBtns.length >= 2) { plusBtns[1].click(); return 'plus2'; }
-        if (plusBtns.length === 1) { plusBtns[0].click(); return 'plus1'; }
+        if (!isSingleOnly && plusBtns.length >= 2) { plusBtns[1].click(); return 'plus2'; }
+        if (plusBtns.length >= 1) { plusBtns[0].click(); return 'plus1'; }
 
         return 'none';
-      }, { modalType });
+      }, { isSingleOnly });
       console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(600);
     }
   }
 
-  // Now click Add to cart — find the modal's button specifically
-  // Key: look for button containing "items to cart" with number matching our quantity
+  // === CONFIRM ADD TO CART ===
   await page.waitForTimeout(800);
-
-  const confirmed = await page.evaluate(({ qty }) => {
+  const confirmed = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
     const cartBtns = btns.filter(b => b.textContent.toLowerCase().includes('to cart') || b.textContent.toLowerCase().includes('update'));
-    console.log('Cart buttons found:', cartBtns.map(b => b.textContent.trim()).join(' | '));
+    console.log('Cart buttons:', cartBtns.map(b => b.textContent.trim()).join(' | '));
 
-    // Find the modal confirm button - count > 0 and < 50
+    // Find button with count > 0 and < 50 (avoid the order guide "Add 54 items" button)
     for (const btn of cartBtns) {
       const text = btn.textContent.trim();
       const match = text.match(/Add (\d+) items? to cart/i);
       if (match && parseInt(match[1]) > 0 && parseInt(match[1]) < 50) {
-        btn.click();
-        return text;
+        btn.click(); return text;
       }
     }
-
     // Plain "Add to cart"
-    const plainBtn = cartBtns.find(b => /^add to cart$/i.test(b.textContent.trim()));
-    if (plainBtn) { plainBtn.click(); return 'Add to cart'; }
-
-    // "Update cart" for items already in cart
-    const updateBtn = cartBtns.find(b => b.textContent.toLowerCase().includes('update'));
-    if (updateBtn) { updateBtn.click(); return updateBtn.textContent.trim(); }
+    const plain = cartBtns.find(b => /^add to cart$/i.test(b.textContent.trim()));
+    if (plain) { plain.click(); return 'Add to cart'; }
+    // Update cart
+    const update = cartBtns.find(b => b.textContent.toLowerCase().includes('update'));
+    if (update) { update.click(); return update.textContent.trim(); }
 
     return null;
-  }, { qty: item.quantity });
+  });
 
   console.log(`  Confirmed: ${confirmed}`);
   await page.waitForTimeout(1500);
@@ -327,26 +316,16 @@ async function addItem(page, item) {
 }
 
 async function placeRestaurantDepotOrder(orderItems) {
-  const browser = await chromium.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   });
   const page = await context.newPage();
-
-  // Capture browser console logs
-  page.on('console', msg => {
-    if (msg.text().includes('Cart buttons')) console.log(`  BROWSER: ${msg.text()}`);
-  });
+  page.on('console', msg => { if (msg.text().includes('Cart buttons')) console.log(`  BROWSER: ${msg.text()}`); });
 
   try {
     console.log('Logging in...');
-    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', {
-      waitUntil: 'domcontentloaded', timeout: 30000
-    });
+    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(5000);
     await page.waitForSelector('#email', { timeout: 30000 });
     await page.fill('#email', process.env.RD_EMAIL);
@@ -358,11 +337,10 @@ async function placeRestaurantDepotOrder(orderItems) {
     console.log('Logged in');
 
     console.log('Loading order guide...');
-    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', {
-      waitUntil: 'domcontentloaded', timeout: 30000
-    });
+    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(6000);
-    console.log(`Order guide loaded`);
+    const btnCount = await page.evaluate(() => document.querySelectorAll('button[aria-label*="Add"]').length);
+    console.log(`Found ${btnCount} Add buttons`);
 
     const notFound = [];
     for (const item of orderItems) {
@@ -370,7 +348,7 @@ async function placeRestaurantDepotOrder(orderItems) {
       if (!success) notFound.push(item.item);
     }
 
-    console.log(`\nDone. Not found: ${notFound.length > 0 ? notFound.join(', ') : 'none'}`);
+    console.log(`\nDone. Not found: ${notFound.length ? notFound.join(', ') : 'none'}`);
     await browser.close();
     return { success: true, notFound };
 
@@ -383,44 +361,30 @@ async function placeRestaurantDepotOrder(orderItems) {
 
 app.post('/whatsapp', async (req, res) => {
   res.sendStatus(200);
-
   const incomingMsg = req.body.Body;
   const fromNumber = req.body.From.replace('whatsapp:', '');
   const senderName = fromNumber === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
-
   console.log(`Message from ${senderName}: ${incomingMsg}`);
 
-  if (!AUTHORIZED_NUMBERS.includes(fromNumber)) {
-    await sendWhatsApp(fromNumber, '❌ Not authorized.');
-    return;
-  }
-
+  if (!AUTHORIZED_NUMBERS.includes(fromNumber)) { await sendWhatsApp(fromNumber, '❌ Not authorized.'); return; }
   await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Processing order...`);
 
   try {
     const parsedOrder = await parseOrder(incomingMsg);
-
-    if (parsedOrder.error) {
-      await sendWhatsApp(fromNumber, `❓ Couldn't parse that. Try forwarding the order list directly.`);
-      return;
-    }
+    if (parsedOrder.error) { await sendWhatsApp(fromNumber, `❓ Couldn't parse that.`); return; }
 
     const orderSummary = parsedOrder.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
     await sendWhatsApp(fromNumber, `📋 Adding to cart:\n\n${orderSummary}`);
 
     const result = await placeRestaurantDepotOrder(parsedOrder);
-
     if (result.success) {
       let msg = `🎉 Done! Checkout:\nmember.restaurantdepot.com/store/business/cart`;
-      if (result.notFound && result.notFound.length > 0) {
-        msg += `\n\n⚠️ Not found:\n${result.notFound.join('\n')}`;
-      }
+      if (result.notFound?.length) msg += `\n\n⚠️ Not found:\n${result.notFound.join('\n')}`;
       await sendWhatsApp(fromNumber, msg);
       await sendConfirmationEmail(parsedOrder, senderName);
     } else {
       await sendWhatsApp(fromNumber, `⚠️ Error: ${result.error}`);
     }
-
   } catch (error) {
     console.error('Error:', error);
     await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Order manually:\nmember.restaurantdepot.com/store/business/order-guide/19933806363004568`);
@@ -428,6 +392,5 @@ app.post('/whatsapp', async (req, res) => {
 });
 
 app.get('/', (req, res) => res.send('Naan & Curry Agent is running! 🍛'));
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Naan & Curry Agent running on port ${PORT}`));
