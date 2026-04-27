@@ -176,20 +176,29 @@ async function addItem(page, item) {
   }
   console.log(`  Opened: ${found.label}`);
 
-  // Wait for modal - specifically wait for the input stepper to appear
-  // The modal has number inputs for single and case quantities
+  // Wait for modal UI to appear - check for either dropdown or +/- buttons
   let modalType = null;
-  for (let attempt = 0; attempt < 15; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     await page.waitForTimeout(400);
     modalType = await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button'));
       const labels = btns.map(b => (b.getAttribute('aria-label') || '').toLowerCase());
-      if (labels.some(l => l.includes('increment case'))) return 'case';
-      if (labels.some(l => l.includes('increment single'))) return 'single-case';
-      if (labels.some(l => l.includes('increment'))) return 'single';
-      // Check for + buttons as fallback
+      
+      // Check for +/- style buttons
+      if (labels.some(l => l.includes('increment case'))) return 'case-stepper';
+      if (labels.some(l => l.includes('increment single'))) return 'single-stepper';
+      if (labels.some(l => l.includes('increment'))) return 'stepper';
       const plusBtns = btns.filter(b => b.textContent.trim() === '+');
       if (plusBtns.length > 0) return `plus-${plusBtns.length}`;
+      
+      // Check for dropdown selector (select element)
+      const selects = document.querySelectorAll('select');
+      if (selects.length > 0) return 'dropdown';
+      
+      // Check for listbox/dropdown items (1,2,3,4... list)
+      const listItems = document.querySelectorAll('[role="option"], [role="listitem"]');
+      if (listItems.length > 0) return 'listbox';
+
       return null;
     });
     if (modalType) break;
@@ -201,36 +210,75 @@ async function addItem(page, item) {
     return false;
   }
 
-  // Click the right button based on modal type
-  for (let i = 0; i < item.quantity; i++) {
-    const clicked = await page.evaluate(({ modalType }) => {
+  // Handle quantity selection based modal type
+  if (modalType === 'dropdown') {
+    // Use HTML select element
+    const selected = await page.evaluate(({ qty }) => {
+      const selects = document.querySelectorAll('select');
+      if (selects.length > 0) {
+        // Find the case select if multiple, else use first
+        const sel = selects[selects.length > 1 ? 1 : 0];
+        sel.value = qty.toString();
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        return `dropdown set to ${qty}`;
+      }
+      return 'no select found';
+    }, { qty: item.quantity });
+    console.log(`  ${selected}`);
+    await page.waitForTimeout(1000);
+
+  } else if (modalType === 'listbox') {
+    // Click the dropdown trigger first, then select the right number
+    await page.evaluate(({ qty }) => {
+      // Click the quantity display to open dropdown
       const btns = Array.from(document.querySelectorAll('button'));
-
-      // Case button (items sold in cases)
-      if (modalType === 'case' || modalType === 'single-case') {
-        const caseBtn = btns.find(b => (b.getAttribute('aria-label') || '').toLowerCase().includes('increment case'));
-        if (caseBtn) { caseBtn.click(); return 'case'; }
-      }
-
-      // Single button
-      if (modalType === 'single' || modalType === 'single-case') {
-        const singleBtn = btns.find(b => (b.getAttribute('aria-label') || '').toLowerCase().includes('increment single'));
-        if (singleBtn) { singleBtn.click(); return 'single'; }
-      }
-
-      // Fallback: + buttons
-      const plusBtns = btns.filter(b => b.textContent.trim() === '+');
-      if (modalType && modalType.startsWith('plus-')) {
-        const count = parseInt(modalType.split('-')[1]);
-        if (count >= 2) { plusBtns[1].click(); return 'plus-case'; }
-        if (count === 1) { plusBtns[0].click(); return 'plus-single'; }
-      }
-
-      return 'none';
-    }, { modalType });
-
-    console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
+      const qtyBtn = btns.find(b => /^\d+$/.test(b.textContent.trim()) || b.textContent.trim() === '1');
+      if (qtyBtn) qtyBtn.click();
+    }, { qty: item.quantity });
     await page.waitForTimeout(500);
+    
+    // Click the right number in the list
+    const clicked = await page.evaluate(({ qty }) => {
+      const options = Array.from(document.querySelectorAll('[role="option"], li'));
+      const target = options.find(o => o.textContent.trim() === qty.toString());
+      if (target) { target.click(); return `listbox selected ${qty}`; }
+      
+      // Try custom amount if number > 9
+      if (qty > 9) {
+        const custom = options.find(o => o.textContent.toLowerCase().includes('custom'));
+        if (custom) { custom.click(); return 'custom'; }
+      }
+      return 'not found in list';
+    }, { qty: item.quantity });
+    console.log(`  ${clicked}`);
+    await page.waitForTimeout(500);
+
+  } else {
+    // Stepper (+/-) buttons
+    for (let i = 0; i < item.quantity; i++) {
+      const clicked = await page.evaluate(({ modalType }) => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const labels = btns.map(b => ({btn: b, label: (b.getAttribute('aria-label') || '').toLowerCase()}));
+        console.log('Increment buttons:', labels.filter(x => x.label.includes('increment')).map(x => x.label).join(' | '));
+
+        const caseBtn = labels.find(x => x.label.includes('increment case'));
+        if (caseBtn) { caseBtn.btn.click(); return 'case'; }
+
+        const singleBtn = labels.find(x => x.label.includes('increment single'));
+        if (singleBtn) { singleBtn.btn.click(); return 'single'; }
+
+        const anyIncrement = labels.find(x => x.label.includes('increment') || x.label.includes('increase'));
+        if (anyIncrement) { anyIncrement.btn.click(); return anyIncrement.label; }
+
+        const plusBtns = btns.filter(b => b.textContent.trim() === '+');
+        if (plusBtns.length >= 2) { plusBtns[1].click(); return 'plus2'; }
+        if (plusBtns.length === 1) { plusBtns[0].click(); return 'plus1'; }
+
+        return 'none';
+      }, { modalType });
+      console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
+      await page.waitForTimeout(500);
+    }
   }
 
   // Now click Add to cart — find the modal's button specifically
@@ -239,43 +287,22 @@ async function addItem(page, item) {
 
   const confirmed = await page.evaluate(({ qty }) => {
     const btns = Array.from(document.querySelectorAll('button'));
-    const results = [];
+    const cartBtns = btns.filter(b => b.textContent.toLowerCase().includes('to cart'));
+    console.log('Cart buttons found:', cartBtns.map(b => b.textContent.trim()).join(' | '));
 
-    for (const btn of btns) {
-      const text = btn.textContent.trim();
-      if (text.toLowerCase().includes('to cart')) {
-        results.push(text);
-      }
-    }
-
-    // Log all cart buttons for debugging
-    console.log('Cart buttons found:', results.join(' | '));
-
-    // Find button with our quantity (or close to it)
-    for (const btn of btns) {
+    // Find the modal confirm button - must have count > 0 and < 50
+    for (const btn of cartBtns) {
       const text = btn.textContent.trim();
       const match = text.match(/Add (\d+) items? to cart/i);
-      if (match) {
-        const count = parseInt(match[1]);
-        // The modal button should have count = qty * itemsPerCase
-        // It must be less than the total order guide items (50+)
-        if (count > 0 && count < 50) {
-          btn.click();
-          return text;
-        }
+      if (match && parseInt(match[1]) > 0 && parseInt(match[1]) < 50) {
+        btn.click();
+        return text;
       }
     }
 
-    // Fallback: simple "Add to cart"
-    const simple = btns.find(b => {
-      const t = b.textContent.trim();
-      return t === 'Add to cart' || t === 'Add 0 items to cart';
-    });
-    // Only click if it's not "Add 0"
-    if (simple && !simple.textContent.includes('0')) {
-      simple.click();
-      return simple.textContent.trim();
-    }
+    // Fallback: plain "Add to cart" (no number)
+    const plainBtn = cartBtns.find(b => /^add to cart$/i.test(b.textContent.trim()) && !b.disabled);
+    if (plainBtn) { plainBtn.click(); return plainBtn.textContent.trim(); }
 
     return null;
   }, { qty: item.quantity });
