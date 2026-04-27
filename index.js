@@ -17,7 +17,6 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-// Items ordered as individual units (no case multiplier)
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
@@ -26,9 +25,6 @@ const SINGLE_ONLY_ITEMS = [
   'Carrots- 10 lb',
 ];
 
-// Units per case for each item.
-// Used to convert "cases ordered" into "cart units" so we know
-// what number to dial each cart row up or down to.
 const CASE_SIZES = {
   'Peeled Garlic':                                              6,
   'White Cauliflower':                                         12,
@@ -163,10 +159,82 @@ async function sendEmail(orderItems, sender) {
 
 // ── CART HELPERS ──────────────────────────────────────────────────────────────
 
+// Read all cart items using aria-label on the increment buttons.
+//
+// The previous version used CSS class selectors ([class*="cart-item"] etc.)
+// which returned 0 results because they don't match Restaurant Depot's DOM.
+// The site's buttons DO consistently carry aria-labels like:
+//   "increment quantity of jumbo red onions - 25 lbs"
+// That's the reliable hook — find every increment button, extract the item
+// name from its label, then walk up the DOM to find the current quantity.
+async function readCartItems(page) {
+  return await page.evaluate(function() {
+    var results = [];
+    var seen = {};
+
+    var allBtns = Array.from(document.querySelectorAll('button'));
+
+    // Every item in the cart has an increment button with an identifiable label
+    var incrementBtns = allBtns.filter(function(b) {
+      var l = (b.getAttribute('aria-label') || '').toLowerCase();
+      return l.includes('increment') || l.includes('increase');
+    });
+
+    incrementBtns.forEach(function(btn) {
+      var rawLabel = btn.getAttribute('aria-label') || '';
+
+      // Extract the item name portion from labels like:
+      //   "Increment quantity of Jumbo Red Onions - 25 lbs"
+      //   "Increase quantity: Fresh Ginger - 30 lbs"
+      //   "increment jumbo red onions - 25 lbs"
+      var name = rawLabel
+        .replace(/increment\s+(quantity\s+)?(of\s+)?/i, '')
+        .replace(/increase\s+(quantity\s+)?(of\s+)?/i, '')
+        .replace(/^\s*:\s*/, '')
+        .trim();
+
+      if (!name || name.length < 3 || seen[name]) return;
+      seen[name] = true;
+
+      // Walk up from the button to find the quantity value.
+      // Try an input first, then any standalone integer in the surrounding container.
+      var qty = null;
+      var el = btn.parentElement;
+      for (var depth = 0; depth < 8; depth++) {
+        if (!el) break;
+
+        var input = el.querySelector('input[type="number"], input[inputmode="numeric"]');
+        if (input) {
+          var v = parseInt(input.value, 10);
+          if (!isNaN(v) && v >= 0) { qty = v; break; }
+        }
+
+        // Look for a text node or span that is just a number
+        var nodes = Array.from(el.querySelectorAll('span, div, p, td, strong, b'));
+        for (var i = 0; i < nodes.length; i++) {
+          var t = (nodes[i].textContent || '').trim();
+          if (/^\d+$/.test(t)) {
+            var n = parseInt(t, 10);
+            if (n > 0 && n < 1000) { qty = n; break; }
+          }
+        }
+        if (qty !== null) break;
+
+        el = el.parentElement;
+      }
+
+      // qty=null means we couldn't read it; default to 1 so we still attempt adjustment
+      results.push({ name: name, qty: qty !== null ? qty : 1 });
+    });
+
+    return results;
+  });
+}
+
 // Score how well a cart item name matches an ordered item name.
-function scoreMatch(cartText, itemName) {
-  var t = cartText.toLowerCase();
-  var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
+function scoreMatch(cartName, orderedName) {
+  var t = cartName.toLowerCase();
+  var words = orderedName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
     return w.length >= 3 && ['lbs', 'pkg', 'and', 'the', 'for', 'all', 'out', 'can', 'dry'].indexOf(w) === -1;
   });
   var priority = words.filter(function(w) { return w.length >= 6; });
@@ -176,114 +244,97 @@ function scoreMatch(cartText, itemName) {
   return score;
 }
 
-// Read all current cart items: name and current qty.
-async function readCartItems(page) {
-  return await page.evaluate(function() {
-    var results = [];
-
-    // Broad net — cart rows vary by site but always contain buttons
-    var candidates = Array.from(document.querySelectorAll(
-      '[class*="cart-item"], [class*="CartItem"], [class*="line-item"], ' +
-      '[class*="LineItem"], [class*="product-item"], article, li'
-    ));
-
-    candidates.forEach(function(el) {
-      if (!el.querySelector('button')) return;
-      var text = (el.textContent || '').trim();
-      if (text.length < 5 || text.length > 3000) return;
-
-      // Try input field for qty first, then scan spans for a lone integer
-      var qty = null;
-      var input = el.querySelector('input[type="number"], input[inputmode="numeric"]');
-      if (input) {
-        qty = parseInt(input.value, 10);
-      } else {
-        var spans = Array.from(el.querySelectorAll('span, div, p, td'));
-        for (var i = 0; i < spans.length; i++) {
-          var t = (spans[i].textContent || '').trim();
-          if (/^\d+$/.test(t) && parseInt(t, 10) > 0 && parseInt(t, 10) < 1000) {
-            qty = parseInt(t, 10);
-            break;
-          }
-        }
-      }
-
-      // Prefer a heading/title element for the name; fall back to first line of text
-      var titleEl = el.querySelector(
-        'h1, h2, h3, h4, h5, [class*="title" i], [class*="name" i], [class*="product" i], [class*="description" i]'
-      );
-      var name = titleEl ? titleEl.textContent.trim() : text.split('\n')[0].trim();
-
-      if (name && qty !== null && !isNaN(qty)) {
-        results.push({ name: name, qty: qty });
-      }
-    });
-
-    // Deduplicate by name (keep first occurrence)
-    var seen = {};
-    return results.filter(function(r) {
-      if (seen[r.name]) return false;
-      seen[r.name] = true;
-      return true;
-    });
-  });
-}
-
-// Click a +, -, or Remove button scoped to the cart row for itemName.
+// Click an increment, decrement, or remove button for a specific cart item.
+//
+// Uses aria-label matching so we directly target the right button without
+// needing to find the item's DOM container first.
+// For increment/decrement: the aria-label contains both the action AND the
+// item name, so we score all matching-direction buttons by item name overlap.
+// For remove: there's no item name in the aria-label, so we walk up from
+// buttons labeled "remove" and check parent text for item keywords.
 async function clickCartButton(page, itemName, direction) {
   return await page.evaluate(function(itemName, direction) {
     var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
       return w.length >= 3;
     });
+    var allBtns = Array.from(document.querySelectorAll('button'));
 
-    // Find the cart row with the best keyword match
-    var candidates = Array.from(document.querySelectorAll(
-      '[class*="cart-item"], [class*="CartItem"], [class*="line-item"], ' +
-      '[class*="LineItem"], [class*="product-item"], article, li'
-    ));
-    var bestEl = null, bestScore = 0;
-    candidates.forEach(function(el) {
-      if (!el.querySelector('button')) return;
-      var text = (el.textContent || '').toLowerCase();
-      var score = words.filter(function(w) { return text.includes(w); }).length;
-      if (score > bestScore) { bestScore = score; bestEl = el; }
-    });
+    if (direction === 'increment' || direction === 'decrement') {
+      var keyword = direction === 'increment' ? 'increment' : 'decrement';
+      var altKeyword = direction === 'increment' ? 'increase' : 'decrease';
+      var plusMinus = direction === 'increment' ? '+' : '-';
 
-    if (!bestEl || bestScore === 0) return 'no-match';
+      var best = null, bestScore = 0;
+      allBtns.forEach(function(b) {
+        var label = (b.getAttribute('aria-label') || '').toLowerCase();
+        var text  = b.textContent.trim();
 
-    // Find the right button within that row
-    var btns = Array.from(bestEl.querySelectorAll('button, a'));
-    var btn = btns.find(function(b) {
-      var label = (b.getAttribute('aria-label') || '').toLowerCase();
-      var txt   = (b.textContent || '').trim().toLowerCase();
-      if (direction === 'increment') return label.includes('increment') || label.includes('increase') || txt === '+';
-      if (direction === 'decrement') return label.includes('decrement') || label.includes('decrease') || txt === '-';
-      if (direction === 'remove')    return label.includes('remove') || txt === 'remove';
-      return false;
-    });
+        var isDir = label.includes(keyword) || label.includes(altKeyword) || text === plusMinus;
+        if (!isDir) return;
 
-    if (!btn) return 'no-button';
-    btn.click();
-    return 'ok';
+        // Score by how many item name words appear in the aria-label
+        var score = words.filter(function(w) { return label.includes(w); }).length;
+        if (score > bestScore) { bestScore = score; best = b; }
+      });
+
+      if (best && bestScore > 0) { best.click(); return 'ok:aria:' + bestScore; }
+
+      // Fallback: plain +/- text button (no aria-label) — look for the one
+      // adjacent to this item's text by finding the closest + or - to item text
+      var plusMinusBtns = allBtns.filter(function(b) { return b.textContent.trim() === plusMinus; });
+      if (plusMinusBtns.length > 0) {
+        // If there's only one, click it. If multiple, try to scope to item.
+        if (plusMinusBtns.length === 1) { plusMinusBtns[0].click(); return 'ok:single-' + plusMinus; }
+      }
+
+      return 'no-match';
+    }
+
+    if (direction === 'remove') {
+      // Find a Remove button whose ancestor container mentions the item name
+      var removeBtns = allBtns.filter(function(b) {
+        var label = (b.getAttribute('aria-label') || '').toLowerCase();
+        var text  = (b.textContent || '').trim().toLowerCase();
+        return label.includes('remove') || text === 'remove';
+      });
+
+      for (var i = 0; i < removeBtns.length; i++) {
+        var btn = removeBtns[i];
+        var parent = btn.parentElement;
+        for (var depth = 0; depth < 7; depth++) {
+          if (!parent) break;
+          var parentText = (parent.textContent || '').toLowerCase();
+          var matches = words.filter(function(w) { return parentText.includes(w); }).length;
+          if (matches >= Math.min(2, words.length)) {
+            btn.click();
+            return 'ok:remove';
+          }
+          parent = parent.parentElement;
+        }
+      }
+      return 'no-remove-btn';
+    }
+
+    return 'unknown-direction';
   }, itemName, direction);
 }
 
-// Bring a cart item from currentQty to targetQty using + or -.
+// Adjust a cart item from currentQty to targetQty.
 async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
   var delta = targetQty - currentQty;
   if (delta === 0) {
     console.log('  [=] ' + itemName + ' already at ' + targetQty);
     return true;
   }
-
   var direction = delta > 0 ? 'increment' : 'decrement';
   var clicks = Math.abs(delta);
   console.log('  [' + direction + '] ' + itemName + ': ' + currentQty + ' → ' + targetQty + ' (' + clicks + ' clicks)');
 
   for (var i = 0; i < clicks; i++) {
     var result = await clickCartButton(page, itemName, direction);
-    if (result !== 'ok') {
-      console.log('  WARNING: ' + direction + ' failed (' + result + ') on click ' + (i + 1));
+    console.log('    [' + (i + 1) + '/' + clicks + '] ' + result);
+    if (result === 'no-match') {
+      console.log('  WARNING: button not found for ' + itemName);
       return false;
     }
     await page.waitForTimeout(600);
@@ -291,47 +342,25 @@ async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
   return true;
 }
 
-// Remove a cart item that isn't in the order.
+// Remove an item that isn't in today's order.
 async function removeCartItem(page, cartName) {
   console.log('  [x] Remove: ' + cartName);
-
   var result = await clickCartButton(page, cartName, 'remove');
-
-  // Fallback: walk up from a Remove button near the item text
-  if (result !== 'ok') {
-    result = await page.evaluate(function(cartName) {
-      var words = cartName.toLowerCase().split(' ').filter(function(w) { return w.length >= 4; });
-      var allBtns = Array.from(document.querySelectorAll('button, a'));
-      for (var i = 0; i < allBtns.length; i++) {
-        var b = allBtns[i];
-        var label = (b.getAttribute('aria-label') || b.textContent || '').toLowerCase();
-        if (!label.includes('remove')) continue;
-        var parent = b.parentElement;
-        for (var depth = 0; depth < 7; depth++) {
-          if (!parent) break;
-          var pText = (parent.textContent || '').toLowerCase();
-          if (words.some(function(w) { return pText.includes(w); })) {
-            b.click();
-            return 'ok-fallback';
-          }
-          parent = parent.parentElement;
-        }
-      }
-      return 'failed';
-    }, cartName);
+  console.log('    ' + result);
+  if (result !== 'ok:remove') {
+    // Last resort: click any visible "Remove" link on the page and hope it's the right one
+    // (only safe if the page removes one at a time with a confirm step)
+    console.log('  WARNING: could not scope remove to item — skipping');
+    return false;
   }
-
-  console.log('    Remove result: ' + result);
-  await page.waitForTimeout(1500); // Let the row disappear from the DOM
-  return result === 'ok' || result === 'ok-fallback';
+  await page.waitForTimeout(1500);
+  return true;
 }
 
 // ── MAIN FLOW ─────────────────────────────────────────────────────────────────
 
 async function placeOrder(orderItems) {
-  // Pre-compute target cart quantities.
-  // Cart quantities are always in individual units, so we multiply cases × caseSize.
-  // Single-only items are ordered in units already.
+  // Build target qty map: ordered cases → cart units
   var targetMap = {};
   orderItems.forEach(function(oi) {
     var isSingle  = SINGLE_ONLY_ITEMS.indexOf(oi.item) !== -1;
@@ -363,7 +392,7 @@ async function placeOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in');
 
-    // ── CLEAR EXISTING CART ────────────────────────────────────────────────────
+    // ── CLEAR CART ─────────────────────────────────────────────────────────────
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
     for (var i = 0; i < 80; i++) {
@@ -383,46 +412,75 @@ async function placeOrder(orderItems) {
     }
     console.log('Cart cleared');
 
-    // ── LOAD ORDER GUIDE AND BULK-ADD EVERYTHING ───────────────────────────────
+    // ── LOAD ORDER GUIDE ───────────────────────────────────────────────────────
     await page.goto(
       'https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',
       { waitUntil: 'domcontentloaded', timeout: 30000 }
     );
     await page.waitForTimeout(6000);
 
+    // ── BULK ADD ALL GUIDE ITEMS ───────────────────────────────────────────────
+    // Use data-testid="add-all-items-button" — more reliable than text matching.
     var bulkLabel = await page.evaluate(function() {
-      var btns = Array.from(document.querySelectorAll('button'));
-      // The bulk button says "Add 54 items to cart" (or similar large count)
-      var bulk = btns.find(function(b) {
-        var m = b.textContent.match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
-        return m && parseInt(m[1], 10) >= 10;
-      });
-      if (bulk) { bulk.click(); return bulk.textContent.trim(); }
+      var btn = document.querySelector('[data-testid="add-all-items-button"]');
+      if (!btn) {
+        // Fallback: text match for "Add N items to cart" with N >= 10
+        var btns = Array.from(document.querySelectorAll('button'));
+        btn = btns.find(function(b) {
+          var m = b.textContent.match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
+          return m && parseInt(m[1], 10) >= 10;
+        });
+      }
+      if (btn) { btn.click(); return btn.textContent.trim(); }
       return null;
     });
 
-    if (!bulkLabel) {
-      throw new Error('Could not find bulk "Add all to cart" button on order guide page');
-    }
-    console.log('Bulk add: ' + bulkLabel);
-    await page.waitForTimeout(6000); // Wait for the full cart to populate
+    if (!bulkLabel) throw new Error('Could not find bulk "Add all to cart" button');
+    console.log('Bulk add clicked: ' + bulkLabel);
 
-    // ── GO TO CART ─────────────────────────────────────────────────────────────
+    // The site shows a confirmation modal: "Add 54 items to cart?
+    // We'll add 1 of each item... Yes, continue / Nevermind"
+    // We must click "Yes, continue" or nothing gets added.
+    // data-testid="PromptModalConfirmButton" is the reliable hook.
+    var confirmed = false;
+    for (var attempt = 0; attempt < 15; attempt++) {
+      await page.waitForTimeout(1000);
+      confirmed = await page.evaluate(function() {
+        var btn = document.querySelector('[data-testid="PromptModalConfirmButton"]');
+        if (btn) { btn.click(); return true; }
+        return false;
+      });
+      if (confirmed) break;
+    }
+    if (!confirmed) throw new Error('Bulk add confirmation modal never appeared');
+    console.log('Bulk add confirmed ("Yes, continue" clicked)');
+
+    // Wait for all 54 items to land in the cart before navigating away.
+    await page.waitForTimeout(8000);
+
+    // ── NAVIGATE TO CART ───────────────────────────────────────────────────────
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(4000);
 
-    var cartItems = await readCartItems(page);
-    console.log('Cart loaded: ' + cartItems.length + ' items');
-    cartItems.forEach(function(ci) { console.log('  cart | ' + ci.name + ' qty=' + ci.qty); });
+    // Read cart items — retry up to 5 times if we get 0 (page may still be loading)
+    var cartItems = [];
+    for (var retry = 0; retry < 5; retry++) {
+      cartItems = await readCartItems(page);
+      if (cartItems.length > 0) break;
+      console.log('Cart read attempt ' + (retry + 1) + ' returned 0 items — retrying...');
+      await page.waitForTimeout(3000);
+    }
 
-    // ── MATCH AND ADJUST ───────────────────────────────────────────────────────
-    // For every item in the cart:
-    //   - If it matches something we ordered → adjust quantity to target
-    //   - If it doesn't → remove it
+    console.log('Cart loaded: ' + cartItems.length + ' items');
+    cartItems.forEach(function(ci) {
+      console.log('  cart | "' + ci.name + '" qty=' + ci.qty);
+    });
+
+    // ── MATCH, ADJUST, AND REMOVE ──────────────────────────────────────────────
     for (var c = 0; c < cartItems.length; c++) {
       var cartItem = cartItems[c];
 
-      // Find the highest-scoring match in our ordered items
+      // Find best match in the ordered items
       var bestKey = null, bestScore = 0;
       Object.keys(targetMap).forEach(function(key) {
         var s = scoreMatch(cartItem.name, key);
@@ -430,24 +488,20 @@ async function placeOrder(orderItems) {
       });
 
       if (!bestKey || bestScore === 0) {
-        // Item is in the order guide but not in today's order — remove it
         await removeCartItem(page, cartItem.name);
       } else {
-        // Item is ordered — adjust qty
         var entry = targetMap[bestKey];
         entry.found = true;
         await adjustCartItemQty(page, bestKey, cartItem.qty, entry.targetQty);
       }
     }
 
-    // ── REPORT ITEMS FROM ORDER NOT FOUND IN CART ──────────────────────────────
-    // These were in the WhatsApp order but never appeared after the bulk add,
-    // meaning they aren't in the order guide yet. Flag for manual add.
+    // ── REPORT MISSING ─────────────────────────────────────────────────────────
     var notFound = Object.keys(targetMap).filter(function(key) {
       return !targetMap[key].found;
     });
-
     console.log('Done. Not in guide: ' + (notFound.length ? notFound.join(', ') : 'none'));
+
     await browser.close();
     return { success: true, notFound: notFound };
 
