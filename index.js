@@ -148,6 +148,7 @@ async function addItem(page, item) {
     for (const btn of document.querySelectorAll('button')) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
       if (!label) continue;
+      if (label.includes('wishlist')) continue;
       const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
       if (score > bestScore) { bestScore = score; best = btn; }
     }
@@ -178,7 +179,7 @@ async function addItem(page, item) {
 
   if (modalReady === 'listbox') {
     const result = await page.evaluate((qty) => {
-      const options = Array.from(document.querySelectorAll('[role="option"]'));
+      const options = Array.from(document.querySelectorAll('[role="option"]')).reverse();
       const target = options.find(o => o.textContent.trim() === String(qty));
       if (target) { target.click(); return `selected ${qty}`; }
       const custom = options.find(o => o.textContent.toLowerCase().includes('custom'));
@@ -203,34 +204,55 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    for (let i = 1; i < item.quantity; i++) {
-      const clicked = await page.evaluate((isSingle) => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
-        if (!isSingle) {
-          const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
-          if (c) { c.b.click(); return 'case'; }
-        }
-        const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
-        if (s) { s.b.click(); return 'single'; }
-        const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
-        if (any) {
-          if (isSingle) { any.b.click(); return 'any-single'; }
-          any.b.click(); return 'any';
-        }
-        const plus = btns.filter(b => b.textContent.trim() === '+');
-        if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
-        if (plus.length >= 1) { plus[0].click(); return '+first'; }
-        return 'none';
-      }, isSingle);
-      console.log(`  [+ ${i}/${item.quantity - 1}] ${clicked}`);
-      await page.waitForTimeout(800);
+    // Context-Aware Stepper Logic: Guarantees it only clicks buttons belonging to this specific item
+    const clicksNeeded = item.quantity - 1;
+    console.log(`  Target: ${item.quantity}, Clicks needed: ${clicksNeeded}`);
+
+    if (clicksNeeded > 0) {
+      for (let i = 0; i < clicksNeeded; i++) {
+        const clicked = await page.evaluate(({itemName, isSingle}) => {
+          const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
+          const btns = Array.from(document.querySelectorAll('button'));
+          
+          let bestBtn = null;
+          let bestScore = -1;
+          
+          for (const b of btns) {
+            const txt = b.textContent.trim().toLowerCase();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            
+            let isPlus = false;
+            if (!isSingle && (aria.includes('increment case') || aria.includes('increase case'))) isPlus = true;
+            else if (aria.includes('increment single') || aria.includes('increase single')) isPlus = true;
+            else if (aria.includes('increment') || aria.includes('increase')) isPlus = true;
+            else if (txt === '+') isPlus = true;
+            
+            if (!isPlus) continue;
+            
+            // Checks the text surrounding the button to ensure it matches the correct item box
+            let parent = b;
+            for(let j=0; j<8; j++) {
+              if(parent.parentElement && parent.parentElement.tagName !== 'BODY') parent = parent.parentElement;
+            }
+            const containerText = (parent.innerText || '').toLowerCase();
+            const score = words.filter(w => containerText.includes(w)).length;
+            
+            if (score > bestScore) { bestScore = score; bestBtn = b; }
+          }
+          
+          if (bestBtn) { bestBtn.click(); return 'scoped +'; }
+          return 'none';
+        }, { itemName: item.item, isSingle });
+        
+        console.log(`  [+ ${i+1}/${clicksNeeded}] ${clicked}`);
+        await page.waitForTimeout(800);
+      }
     }
   }
 
   await page.waitForTimeout(600);
   const confirmed = await page.evaluate(() => {
-    const btns = Array.from(document.querySelectorAll('button'));
+    const btns = Array.from(document.querySelectorAll('button')).reverse();
     const cartBtns = btns.filter(b => /to cart|update/i.test(b.textContent));
     for (const b of cartBtns) {
       const m = b.textContent.match(/Add (\d+)/i);
@@ -267,11 +289,22 @@ async function placeOrder(orderItems) {
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
     
-    let removeBtns = page.locator('button:has-text("Remove")');
-    while (await removeBtns.count() > 0) {
-      await removeBtns.first().click();
+    // Restored robust cart clearer that handles SVG trash buttons
+    for (let i = 0; i < 60; i++) {
+      const removed = await page.evaluate(() => {
+        const els = Array.from(document.querySelectorAll('button, a, [role="button"]')).reverse();
+        const removeBtn = els.find(b => {
+          const txt = (b.textContent || '').trim().toLowerCase();
+          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+          const html = (b.innerHTML || '').toLowerCase();
+          if (aria.includes('wishlist')) return false; 
+          return txt === 'remove' || txt === 'delete' || aria.includes('remove') || aria.includes('delete') || html.includes('trash');
+        });
+        if (removeBtn) { removeBtn.click(); return true; }
+        return false;
+      });
+      if (!removed) break;
       await page.waitForTimeout(1500);
-      removeBtns = page.locator('button:has-text("Remove")'); 
     }
     console.log('Cart cleared');
 
