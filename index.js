@@ -9,7 +9,8 @@ const sgMail = require('@sendgrid/mail');
 // ==========================================
 const REQUIRED_ENV = [
   'SENDGRID_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
-  'ANTHROPIC_API_KEY', 'RD_EMAIL', 'RD_PASSWORD', 'ADMIN_EMAIL'
+  'ANTHROPIC_API_KEY', 'RD_EMAIL', 'RD_PASSWORD', 'YOUR_WHATSAPP_NUMBER',
+  'RAHUL_WHATSAPP_NUMBER'
 ];
 REQUIRED_ENV.forEach(key => {
   if (!process.env[key]) console.warn(`⚠️ Missing environment variable: ${key}`);
@@ -113,7 +114,7 @@ async function parseOrder(message) {
   
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-3-5-haiku-latest', 
+      model: 'claude-haiku-4-5-20251001', 
       max_tokens: 1000,
       messages: [{ 
         role: 'user', 
@@ -136,13 +137,12 @@ async function parseOrder(message) {
       }]
     });
 
-    // Extract just the JSON part to prevent errors if Claude adds conversational filler
     const text = response.content[0].text.trim();
     const jsonStr = text.match(/\[.*\]/s)?.[0] || text;
     return JSON.parse(jsonStr);
   } catch (err) {
     console.error("Parsing Error:", err);
-    return { error: true };
+    return { error: true, details: err.message };
   }
 }
 
@@ -158,8 +158,8 @@ async function sendWhatsApp(to, body) {
 
 async function sendEmail(orderItems, sender) {
   const msg = {
-    from: process.env.ADMIN_EMAIL, 
-    to: process.env.ADMIN_EMAIL,
+    from: 'nicksodhi@gmail.com', 
+    to: 'nicksodhi@gmail.com',
     subject: `🛒 Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
     text: `Order submitted by ${sender}:\n\n${orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n')}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`
   };
@@ -175,9 +175,8 @@ async function addItem(page, item) {
   console.log(`Processing: ${item.item} (Qty: ${item.quantity})`);
 
   try {
-    await page.keyboard.press('Escape'); // Dismiss potential popups
+    await page.keyboard.press('Escape');
     
-    // 1. Locate the item Add button using fuzzy matching on aria-labels
     const addButton = await page.locator(`button[aria-label*="Add"]`).filter({ hasText: '' }).evaluateHandle((btns, itemName) => {
         const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length > 3);
         let best = null, maxScore = 0;
@@ -192,15 +191,12 @@ async function addItem(page, item) {
 
     if (!addButton) return false;
 
-    // 2. Wait for quantity modal/selector
     await page.waitForTimeout(1000);
 
-    // 3. Handle Quantity Input (Dropdown, Listbox, or Stepper)
     const select = page.locator('select').first();
     if (await select.isVisible()) {
       await select.selectOption({ label: String(item.quantity) });
     } else {
-      // Stepper Logic
       for (let i = 0; i < item.quantity; i++) {
         const btnType = isSingle ? 'single' : 'case';
         const increment = page.locator(`button[aria-label*="increment ${btnType}"], button[aria-label*="increase ${btnType}"]`).first();
@@ -213,7 +209,6 @@ async function addItem(page, item) {
       }
     }
 
-    // 4. Confirm Add to Cart
     const confirmBtn = page.locator('button:has-text("Add to cart"), button:has-text("Update")').first();
     await confirmBtn.click();
     await page.waitForTimeout(1000);
@@ -233,14 +228,12 @@ async function placeOrder(orderItems) {
   const page = await context.newPage();
 
   try {
-    // Login Phase
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init', { waitUntil: 'networkidle' });
     await page.fill('#email', process.env.RD_EMAIL);
     await page.fill('input[type="password"]', process.env.RD_PASSWORD);
     await page.click('button[type="submit"]');
     await page.waitForURL(/www\.restaurantdepot\.com/, { timeout: 15000 });
 
-    // Clear Cart Phase
     await page.goto('https://member.restaurantdepot.com/store/business/cart');
     const removeBtns = page.locator('button:has-text("Remove")');
     while (await removeBtns.count() > 0) {
@@ -248,7 +241,6 @@ async function placeOrder(orderItems) {
       await page.waitForTimeout(800);
     }
 
-    // Order Guide Phase
     await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'networkidle' });
     
     const notFound = [];
@@ -261,7 +253,6 @@ async function placeOrder(orderItems) {
   } catch (e) {
     return { success: false, error: e.message };
   } finally {
-    // Ensuring browser always closes prevents memory leaks on your server
     await browser.close();
   }
 }
@@ -271,7 +262,7 @@ async function placeOrder(orderItems) {
 // ==========================================
 
 app.post('/whatsapp', async (req, res) => {
-  res.status(200).send('EVENT_RECEIVED'); // Immediate response to Twilio to prevent timeout
+  res.status(200).send('EVENT_RECEIVED'); 
 
   const { Body: msg, From: fromRaw } = req.body;
   const from = fromRaw.replace('whatsapp:', '');
@@ -284,7 +275,7 @@ app.post('/whatsapp', async (req, res) => {
   try {
     const order = await parseOrder(msg);
     if (order.error || !Array.isArray(order)) {
-      await sendWhatsApp(from, "❌ Sorry, I couldn't understand that order format.");
+      await sendWhatsApp(from, `❌ Parsing Error: ${order.details || 'Not a valid array'}`);
       return;
     }
 
@@ -302,11 +293,11 @@ app.post('/whatsapp', async (req, res) => {
       await sendWhatsApp(from, `❌ Automation failed: ${result.error}`);
     }
   } catch (err) {
-    await sendWhatsApp(from, "❌ An unexpected error occurred.");
+    await sendWhatsApp(from, `❌ An unexpected error occurred: ${err.message}`);
   }
 });
 
 app.get('/', (req, res) => res.send('System Online 🟢'));
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080; 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
