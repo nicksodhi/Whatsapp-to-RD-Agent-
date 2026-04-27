@@ -3,19 +3,6 @@ const twilio = require('twilio');
 const Anthropic = require('@anthropic-ai/sdk');
 const { chromium } = require('playwright');
 const sgMail = require('@sendgrid/mail');
-
-// ==========================================
-// CONFIGURATION & VALIDATION
-// ==========================================
-const REQUIRED_ENV = [
-  'SENDGRID_API_KEY', 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN',
-  'ANTHROPIC_API_KEY', 'RD_EMAIL', 'RD_PASSWORD', 'YOUR_WHATSAPP_NUMBER',
-  'RAHUL_WHATSAPP_NUMBER'
-];
-REQUIRED_ENV.forEach(key => {
-  if (!process.env[key]) console.warn(`⚠️ Missing environment variable: ${key}`);
-});
-
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const app = express();
@@ -101,203 +88,256 @@ const ITEM_MAP = {
   "diet coke": "Diet Coke Bottles, 16.9 fl oz, 24 Pack",
 };
 
-// ==========================================
-// CORE FUNCTIONS
-// ==========================================
-
-/**
- * PARSE ORDER
- * Translates informal chef text into exact order guide items using Claude AI.
- */
 async function parseOrder(message) {
   const itemMapStr = Object.entries(ITEM_MAP).map(([k,v]) => `"${k}" -> "${v}"`).join('\n');
-  
-  try {
-    const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001', 
-      max_tokens: 1000,
-      messages: [{ 
-        role: 'user', 
-        content: `You are an automated ordering assistant for a restaurant. Your job is to translate informal grocery text messages from chefs into an exact JSON array for our purchasing system.
-        
-        Order Guide Mapping:
-        ${itemMapStr}
-        
-        Rules for Processing:
-        1. IGNORE headers, dates, employee names (e.g., "Mohan"), locations (e.g., "Rhodes Ranch"), and section titles (e.g., "RESTAURANT DEPOT").
-        2. FUZZY MATCH the chef's item description to the closest key in our mapping list, even if they include extra words, weights, or formatting (e.g., "Carrots (25lb bag)" maps to "carrots").
-        3. OUTPUT the EXACT mapped value from the right side of the mapping list. Never invent items.
-        4. Use the exact quantity requested as a number.
-        5. Return ONLY a valid JSON array, absolutely no conversational text.
-        
-        Format Example: [{"item": "Jumbo Red Onions - 25 lbs", "quantity": 1}]
-        
-        Chef's List: 
-        ${message}` 
-      }]
-    });
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 2000,
+    messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
 
-    const text = response.content[0].text.trim();
-    const jsonStr = text.match(/\[.*\]/s)?.[0] || text;
-    return JSON.parse(jsonStr);
-  } catch (err) {
-    console.error("Parsing Error:", err);
-    return { error: true, details: err.message };
-  }
+Item mapping:
+${itemMapStr}
+
+Rules:
+- IGNORE headers, dates, and employee names (e.g. "Sat, Apr 25 | Mohan", "RESTAURANT DEPOT")
+- ONLY add items explicitly listed with a quantity
+- Use EXACT quantity from order, never change it
+- Return ONLY a JSON array
+
+Format: [{"item": "exact name from map", "quantity": NUMBER}]
+
+Order: ${message}` }]
+  });
+  try {
+    return JSON.parse(response.content[0].text.trim().replace(/\`\`\`json|\`\`\`/g, '').trim());
+  } catch { return { error: true }; }
 }
 
 async function sendWhatsApp(to, body) {
-  try {
-    await twilioClient.messages.create({ 
-      from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER, 
-      to: 'whatsapp:' + to, 
-      body 
-    });
-  } catch (e) { console.error('WhatsApp Error:', e.message); }
+  await twilioClient.messages.create({ from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER, to: 'whatsapp:' + to, body });
 }
 
 async function sendEmail(orderItems, sender) {
-  const msg = {
-    from: 'nicksodhi@gmail.com', 
-    to: 'nicksodhi@gmail.com',
-    subject: `🛒 Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
-    text: `Order submitted by ${sender}:\n\n${orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n')}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`
-  };
-  try { await sgMail.send(msg); } catch (e) { console.error('Email Error:', e.message); }
+  await sgMail.send({
+    from: 'nicksodhi@gmail.com', to: 'nicksodhi@gmail.com',
+    subject: `Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
+    text: `Order by ${sender}:\n\n${orderItems.map(i => `• ${i.quantity}x ${i.item}`).join('\n')}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`
+  });
 }
-
-// ==========================================
-// BROWSER AUTOMATION (PLAYWRIGHT)
-// ==========================================
 
 async function addItem(page, item) {
   const isSingle = SINGLE_ONLY_ITEMS.includes(item.item);
-  console.log(`Processing: ${item.item} (Qty: ${item.quantity})`);
+  console.log(`\n[${item.item}] qty=${item.quantity} single=${isSingle}`);
 
-  try {
-    await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+
+  // Find best matching Add button
+  const found = await page.evaluate((itemName) => {
+    const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length >= 4);
+    const priority = words.filter(w => w.length >= 6);
+    let best = null, bestScore = 0;
     
-    const addButton = await page.locator(`button[aria-label*="Add"]`).filter({ hasText: '' }).evaluateHandle((btns, itemName) => {
-        const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(w => w.length > 3);
-        let best = null, maxScore = 0;
-        btns.forEach(btn => {
-            const label = btn.getAttribute('aria-label').toLowerCase();
-            const score = words.reduce((acc, word) => acc + (label.includes(word) ? 1 : 0), 0);
-            if (score > maxScore) { maxScore = score; best = btn; }
-        });
-        if (best) best.click();
-        return best;
-    }, item.item);
+    // TWEAK: Look at ALL buttons, not just ones with "Add" in the label. 
+    // This allows it to click buttons that say "1 ct" or "3 ct" instead of "+ Add"
+    for (const btn of document.querySelectorAll('button')) {
+      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      if (!label) continue;
+      
+      const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
+      if (score > bestScore) { bestScore = score; best = btn; }
+    }
+    if (best && bestScore > 0) { best.click(); return best.getAttribute('aria-label') || best.textContent; }
+    return null;
+  }, item.item);
 
-    if (!addButton) return false;
+  if (!found) { console.log('  NOT FOUND'); return false; }
+  console.log(`  Matched: ${found}`);
 
-    await page.waitForTimeout(1000);
+  // Wait up to 8 seconds for modal
+  let modalReady = false;
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(400);
+    modalReady = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      const labels = btns.map(b => (b.getAttribute('aria-label') || '').toLowerCase());
+      if (labels.some(l => l.includes('increment'))) return 'stepper';
+      if (Array.from(document.querySelectorAll('[role="option"]')).some(o => /^\d+$/.test(o.textContent.trim()))) return 'listbox';
+      if (document.querySelector('select')) return 'dropdown';
+      return false;
+    });
+    if (modalReady) break;
+  }
+  console.log(`  Modal: ${modalReady}`);
+  if (!modalReady) { console.log('  Modal failed'); return false; }
 
-    const select = page.locator('select').first();
-    if (await select.isVisible()) {
-      await select.selectOption({ label: String(item.quantity) });
-    } else {
-      for (let i = 0; i < item.quantity; i++) {
-        const btnType = isSingle ? 'single' : 'case';
-        const increment = page.locator(`button[aria-label*="increment ${btnType}"], button[aria-label*="increase ${btnType}"]`).first();
-        if (await increment.isVisible()) {
-          await increment.click();
-        } else {
-          await page.locator('button:has-text("+")').last().click();
-        }
-        await page.waitForTimeout(400);
+  if (modalReady === 'listbox') {
+    // Select quantity from numbered list
+    const result = await page.evaluate((qty) => {
+      const options = Array.from(document.querySelectorAll('[role="option"]'));
+      const target = options.find(o => o.textContent.trim() === String(qty));
+      if (target) { target.click(); return `selected ${qty}`; }
+      const custom = options.find(o => o.textContent.toLowerCase().includes('custom'));
+      if (custom) { custom.click(); return 'custom'; }
+      return 'not found';
+    }, item.quantity);
+    console.log(`  Listbox: ${result}`);
+    if (result === 'custom') {
+      await page.waitForTimeout(400);
+      const input = await page.$('input[type="number"], input[inputmode="numeric"]');
+      if (input) {
+        await input.fill(String(item.quantity));
+        await input.dispatchEvent('change');
       }
     }
+    await page.waitForTimeout(600);
 
-    const confirmBtn = page.locator('button:has-text("Add to cart"), button:has-text("Update")').first();
-    await confirmBtn.click();
-    await page.waitForTimeout(1000);
-    return true;
-  } catch (err) {
-    console.error(`Failed to add ${item.item}:`, err.message);
-    return false;
+  } else if (modalReady === 'dropdown') {
+    await page.evaluate((qty) => {
+      const sel = document.querySelector('select');
+      if (sel) { sel.value = String(qty); sel.dispatchEvent(new Event('change', { bubbles: true })); }
+    }, item.quantity);
+    await page.waitForTimeout(600);
+
+  } else {
+    // Stepper buttons
+    for (let i = 0; i < item.quantity; i++) {
+      const clicked = await page.evaluate((isSingle) => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
+        if (!isSingle) {
+          const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
+          if (c) { c.b.click(); return 'case'; }
+        }
+        const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
+        if (s) { s.b.click(); return 'single'; }
+        const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
+        if (any) {
+          if (isSingle) { any.b.click(); return 'any-single'; }
+          any.b.click(); return 'any';
+        }
+        const plus = btns.filter(b => b.textContent.trim() === '+');
+        if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
+        if (plus.length >= 1) { plus[0].click(); return '+first'; }
+        return 'none';
+      }, isSingle);
+      console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
+      await page.waitForTimeout(600);
+    }
   }
+
+  // Click confirm button — find modal button with small count or plain "Add to cart"
+  await page.waitForTimeout(600);
+  const confirmed = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    // Log all cart-related buttons
+    const cartBtns = btns.filter(b => /to cart|update/i.test(b.textContent));
+    console.log('CART_BTNS:' + cartBtns.map(b => b.textContent.trim()).join('|'));
+    // Prefer button with count 1-49
+    for (const b of cartBtns) {
+      const m = b.textContent.match(/Add (\d+)/i);
+      if (m && +m[1] > 0 && +m[1] < 50) { b.click(); return b.textContent.trim(); }
+    }
+    // Plain "Add to cart"
+    const plain = btns.find(b => /^add to cart$/i.test(b.textContent.trim()));
+    if (plain) { plain.click(); return 'Add to cart'; }
+    // Update
+    const upd = btns.find(b => /update/i.test(b.textContent));
+    if (upd) { upd.click(); return upd.textContent.trim(); }
+    return null;
+  });
+  console.log(`  Confirmed: ${confirmed}`);
+  await page.waitForTimeout(1500);
+  return !!confirmed;
 }
 
 async function placeOrder(orderItems) {
-  const browser = await chromium.launch({ 
-    headless: true, 
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] 
-  });
-  const context = await browser.newContext();
+  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
   const page = await context.newPage();
+  page.on('console', m => { if (m.text().startsWith('CART_BTNS:')) console.log('  BROWSER:', m.text()); });
 
   try {
-    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init', { waitUntil: 'networkidle' });
+    // Login
+    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(5000);
+    await page.waitForSelector('#email', { timeout: 30000 });
     await page.fill('#email', process.env.RD_EMAIL);
+    await page.waitForTimeout(400);
     await page.fill('input[type="password"]', process.env.RD_PASSWORD);
+    await page.waitForTimeout(400);
     await page.click('button[type="submit"]');
-    await page.waitForURL(/www\.restaurantdepot\.com/, { timeout: 15000 });
+    await page.waitForTimeout(5000);
+    console.log('Logged in');
 
-    await page.goto('https://member.restaurantdepot.com/store/business/cart');
-    const removeBtns = page.locator('button:has-text("Remove")');
-    while (await removeBtns.count() > 0) {
-      await removeBtns.first().click();
-      await page.waitForTimeout(800);
+    // Clear cart
+    await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(3000);
+    for (let i = 0; i < 60; i++) {
+      const removed = await page.evaluate(() => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const removeBtn = btns.find(b => b.textContent.trim() === 'Remove' || (b.getAttribute('aria-label') || '').includes('Remove'));
+        if (removeBtn) { removeBtn.click(); return true; }
+        return false;
+      });
+      if (!removed) break;
+      await page.waitForTimeout(1200);
     }
+    console.log('Cart cleared');
 
-    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'networkidle' });
-    
+    // Load order guide
+    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(6000);
+    console.log('Order guide loaded');
+
     const notFound = [];
     for (const item of orderItems) {
-      const success = await addItem(page, item);
-      if (!success) notFound.push(item.item);
+      const ok = await addItem(page, item);
+      if (!ok) notFound.push(item.item);
     }
 
-    return { success: true, notFound };
-  } catch (e) {
-    return { success: false, error: e.message };
-  } finally {
     await browser.close();
+    console.log('Done. Not found:', notFound.join(', ') || 'none');
+    return { success: true, notFound };
+
+  } catch (e) {
+    console.error(e.message);
+    await browser.close();
+    return { success: false, error: e.message };
   }
 }
 
-// ==========================================
-// ROUTES & SERVER
-// ==========================================
-
 app.post('/whatsapp', async (req, res) => {
-  res.status(200).send('EVENT_RECEIVED'); 
-
-  const { Body: msg, From: fromRaw } = req.body;
-  const from = fromRaw.replace('whatsapp:', '');
+  res.sendStatus(200);
+  const msg = req.body.Body;
+  const from = req.body.From.replace('whatsapp:', '');
   const name = from === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
+  console.log(`From ${name}: ${msg}`);
 
-  if (!AUTHORIZED_NUMBERS.includes(from)) return;
-
-  await sendWhatsApp(from, `👨‍🍳 Working on it, ${name}...`);
+  if (!AUTHORIZED_NUMBERS.includes(from)) { await sendWhatsApp(from, '❌ Not authorized'); return; }
+  await sendWhatsApp(from, `✅ Got it ${name}! Processing...`);
 
   try {
     const order = await parseOrder(msg);
-    if (order.error || !Array.isArray(order)) {
-      await sendWhatsApp(from, `❌ Parsing Error: ${order.details || 'Not a valid array'}`);
-      return;
-    }
+    if (order.error) { await sendWhatsApp(from, '❓ Could not parse order'); return; }
 
-    await sendWhatsApp(from, `🛒 Adding ${order.length} items to your cart...`);
+    const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
+    await sendWhatsApp(from, `📋 Adding to cart:\n\n${summary}`);
+
     const result = await placeOrder(order);
-
     if (result.success) {
-      let reply = `✅ Done! Cart is ready.\n\nItems added:\n${order.map(i => `• ${i.quantity}x ${i.item}`).join('\n')}`;
-      if (result.notFound.length > 0) {
-        reply += `\n\n⚠️ Not found: ${result.notFound.join(', ')}`;
-      }
+      let reply = `🎉 Done! Checkout:\nmember.restaurantdepot.com/store/business/cart`;
+      if (result.notFound?.length) reply += `\n\n⚠️ Not found: ${result.notFound.join(', ')}`;
       await sendWhatsApp(from, reply);
       await sendEmail(order, name);
     } else {
-      await sendWhatsApp(from, `❌ Automation failed: ${result.error}`);
+      await sendWhatsApp(from, `⚠️ Error: ${result.error}`);
     }
-  } catch (err) {
-    await sendWhatsApp(from, `❌ An unexpected error occurred: ${err.message}`);
+  } catch (e) {
+    console.error(e);
+    await sendWhatsApp(from, '⚠️ Something went wrong. Please order manually.');
   }
 });
 
-app.get('/', (req, res) => res.send('System Online 🟢'));
-
-const PORT = process.env.PORT || 8080; 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.get('/', (req, res) => res.send('Naan & Curry Agent 🍛'));
+app.listen(process.env.PORT || 3000, () => console.log('Running'));
