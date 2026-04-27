@@ -80,9 +80,6 @@ const ITEM_MAP = {
   "diet coke": "Diet Coke Bottles, 16.9 fl oz, 24 Pack",
 };
 
-// Items sold as singles (no case option)
-const SINGLE_ITEMS = ['mint', 'herb', 'lemon', 'flower', 'cilantro', 'cauliflower', 'carrot'];
-
 async function parseOrder(message) {
   const itemMapStr = Object.entries(ITEM_MAP)
     .map(([k, v]) => `"${k}" → "${v}"`)
@@ -100,8 +97,7 @@ ${itemMapStr}
 
 Rules:
 - ONLY add items EXPLICITLY listed in the order with a quantity number
-- The quantity in the order = EXACT number to put in JSON (never change it)
-- If quantity is 2, use 2. If quantity is 4, use 4. Never round down.
+- The quantity in the order = EXACT number to use (never change it)
 - If an item is NOT in the order message, do NOT add it
 - Skip: Ketchup, Vinegar, Coca-Cola, Fanta, Indian spices, disposables
 - Return ONLY a JSON array, no markdown, no explanation
@@ -141,10 +137,10 @@ async function sendConfirmationEmail(orderItems, sender) {
 }
 
 async function addItemToCart(page, item) {
-  const isSingle = SINGLE_ITEMS.some(s => item.item.toLowerCase().includes(s));
+  console.log(`\n--- ${item.item} x${item.quantity} ---`);
 
-  // Find and click the Add button
-  const result = await page.evaluate(({ itemName }) => {
+  // Find and click the Add button for this item
+  const found = await page.evaluate(({ itemName }) => {
     const searchWords = itemName.toLowerCase()
       .replace(/[^a-z0-9 ]/g, ' ')
       .split(' ')
@@ -165,114 +161,113 @@ async function addItemToCart(page, item) {
 
     if (bestBtn && bestScore > 0) {
       bestBtn.click();
-      return { found: true, label: bestBtn.getAttribute('aria-label'), score: bestScore };
+      return bestBtn.getAttribute('aria-label');
     }
-    return { found: false };
+    return null;
   }, { itemName: item.item });
 
-  if (!result.found) {
-    console.log(`NOT FOUND: ${item.item}`);
+  if (!found) {
+    console.log(`  NOT FOUND`);
     return false;
   }
+  console.log(`  Found: ${found}`);
 
-  console.log(`Modal opened: ${result.label} (score: ${result.score})`);
-  
-  // Wait for modal to appear - look for the case + button to confirm modal is loaded
-  let modalLoaded = false;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    modalLoaded = await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      return btns.some(b => {
-        const label = (b.getAttribute('aria-label') || '').toLowerCase();
-        return label.includes('increment case') || label.includes('increase case') || label.includes('increment single');
-      });
-    });
-    if (modalLoaded) break;
-    await page.waitForTimeout(500);
-  }
-  console.log(`  Modal loaded: ${modalLoaded}`);
-
-  // Click + button the right number of times
-  for (let i = 0; i < item.quantity; i++) {
-    const clicked = await page.evaluate(({ isSingle }) => {
-      const btns = Array.from(document.querySelectorAll('button'));
-
-      if (isSingle) {
-        const singleBtn = btns.find(b => {
-          const label = (b.getAttribute('aria-label') || '').toLowerCase();
-          return label.includes('increment single') || label.includes('increase single');
-        });
-        if (singleBtn) { singleBtn.click(); return 'single+aria'; }
-        const plusBtn = btns.find(b => b.textContent.trim() === '+');
-        if (plusBtn) { plusBtn.click(); return 'single+text'; }
-      } else {
-        const caseBtn = btns.find(b => {
-          const label = (b.getAttribute('aria-label') || '').toLowerCase();
-          return label.includes('increment case') || label.includes('increase case');
-        });
-        if (caseBtn) { caseBtn.click(); return 'case+aria'; }
-        const plusBtns = btns.filter(b => b.textContent.trim() === '+');
-        if (plusBtns.length >= 2) { plusBtns[1].click(); return 'case+fallback'; }
-        if (plusBtns.length === 1) { plusBtns[0].click(); return 'only+'; }
-      }
-      return 'not_clicked';
-    }, { isSingle });
-
-    console.log(`  Click ${i + 1}/${item.quantity}: ${clicked}`);
-    await page.waitForTimeout(800);
-  }
-
-  // Find and click the modal confirm button
-  // The modal lives inside a dialog/overlay element
-  // The order guide button is OUTSIDE the modal
-  await page.waitForTimeout(500);
-
-  const confirmed = await page.evaluate(() => {
-    // First try: find button inside a dialog/modal container
-    const dialogs = document.querySelectorAll('[role="dialog"], [data-dialog], .modal, [class*="modal"], [class*="dialog"], [class*="overlay"], [class*="drawer"]');
-    for (const dialog of dialogs) {
-      const btns = Array.from(dialog.querySelectorAll('button'));
-      const addBtn = btns.find(b => b.textContent.includes('to cart') || b.textContent.includes('Add'));
-      if (addBtn && addBtn.textContent.includes('cart')) {
-        addBtn.click();
-        return 'dialog: ' + addBtn.textContent.trim();
-      }
+  // Wait for the increment case button to appear (confirms modal is open)
+  try {
+    await page.waitForSelector('button[aria-label*="Increment case"], button[aria-label*="Increase case"], button[aria-label*="increment case"], button[aria-label*="increase case"]', { timeout: 8000 });
+    console.log(`  Modal ready (case button visible)`);
+  } catch {
+    // No case button - try single increment
+    try {
+      await page.waitForSelector('button[aria-label*="Increment single"], button[aria-label*="Increase single"], button[aria-label*="increment single"]', { timeout: 3000 });
+      console.log(`  Modal ready (single button visible)`);
+    } catch {
+      console.log(`  Modal may not have case/single buttons - trying anyway`);
+      await page.waitForTimeout(2000);
     }
+  }
 
-    // Second try: find button with "items to cart" that has smallest count
-    const allBtns = Array.from(document.querySelectorAll('button'));
-    const cartBtns = allBtns.filter(b => b.textContent.includes('to cart'));
+  // Click the increment button the right number of times
+  for (let i = 0; i < item.quantity; i++) {
+    // Try case button first, then single, then any + button
+    const clicked = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      
+      // Priority 1: case increment button
+      const caseBtn = btns.find(b => {
+        const label = (b.getAttribute('aria-label') || '').toLowerCase();
+        return label.includes('increment case') || label.includes('increase case');
+      });
+      if (caseBtn) { caseBtn.click(); return 'case'; }
+
+      // Priority 2: single increment button  
+      const singleBtn = btns.find(b => {
+        const label = (b.getAttribute('aria-label') || '').toLowerCase();
+        return label.includes('increment single') || label.includes('increase single');
+      });
+      if (singleBtn) { singleBtn.click(); return 'single'; }
+
+      // Priority 3: any + button
+      const plusBtn = btns.find(b => b.textContent.trim() === '+');
+      if (plusBtn) { plusBtn.click(); return 'plus'; }
+
+      return 'none';
+    });
     
-    let modalBtn = null;
-    let minCount = Infinity;
-    for (const btn of cartBtns) {
+    console.log(`  Click ${i+1}/${item.quantity}: ${clicked}`);
+    await page.waitForTimeout(600);
+  }
+
+  // Wait for the "Add X items to cart" button to appear and have a count > 0
+  await page.waitForTimeout(500);
+  
+  // Click the confirm button - look for it inside the product modal
+  // The key insight: the modal confirm button text changes as you add items
+  // "Add 0 items to cart" is disabled, "Add 4 items to cart" is active
+  const confirmed = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    
+    // Find button with "items to cart" that has count > 0 and < 20
+    // (the order guide button has 50+ items, we want the modal one with small count)
+    for (const btn of btns) {
       const text = btn.textContent.trim();
       const match = text.match(/Add (\d+) items? to cart/i);
       if (match) {
         const count = parseInt(match[1]);
-        if (count < minCount) {
-          minCount = count;
-          modalBtn = btn;
+        if (count > 0 && count <= 20) {
+          btn.click();
+          return text;
         }
       }
     }
-    if (modalBtn && minCount < 20) {
-      modalBtn.click();
-      return 'min-count: ' + modalBtn.textContent.trim();
-    }
 
-    // Third try: find "Add to cart" exact text (no number)
-    const simpleBtn = allBtns.find(b => b.textContent.trim() === 'Add to cart');
-    if (simpleBtn) {
-      simpleBtn.click();
-      return 'simple: Add to cart';
-    }
+    // Fallback: "Add to cart" button (some items have no case/single split)
+    const simpleBtn = btns.find(b => b.textContent.trim() === 'Add to cart' && !b.disabled);
+    if (simpleBtn) { simpleBtn.click(); return 'Add to cart'; }
 
     return null;
   });
 
-  console.log(`Confirmed: ${confirmed}`);
-  await page.waitForTimeout(2000);
+  console.log(`  Confirmed: ${confirmed}`);
+  
+  // If confirm failed, try pressing Enter or clicking the blue button
+  if (!confirmed) {
+    console.log(`  Confirm failed - trying blue button`);
+    await page.evaluate(() => {
+      // Find any prominent blue/primary button that's not the order guide button
+      const btns = Array.from(document.querySelectorAll('button'));
+      const primaryBtn = btns.find(b => {
+        const text = b.textContent.trim();
+        return (text.includes('cart') || text.includes('Add')) && 
+               !text.includes('55') && !text.includes('56') && 
+               !text.includes('54') && !text.includes('53') &&
+               b.style.backgroundColor || b.className.includes('primary');
+      });
+      if (primaryBtn) primaryBtn.click();
+    });
+  }
+
+  await page.waitForTimeout(1500);
   return true;
 }
 
@@ -313,25 +308,24 @@ async function placeRestaurantDepotOrder(orderItems) {
     );
     console.log(`Found ${btnCount} Add buttons`);
 
-    const results = { added: [], notFound: [] };
+    // Log all button aria-labels to understand what's available
+    const allLabels = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('button[aria-label]'))
+        .map(b => b.getAttribute('aria-label'))
+        .filter(l => l && l.toLowerCase().includes('increment'))
+        .slice(0, 10);
+    });
+    console.log('Sample increment buttons:', JSON.stringify(allLabels));
 
+    const notFound = [];
     for (const item of orderItems) {
-      console.log(`\n--- Processing: ${item.item} x${item.quantity} ---`);
       const success = await addItemToCart(page, item);
-      if (success) {
-        results.added.push(item);
-      } else {
-        results.notFound.push(item.item);
-      }
+      if (!success) notFound.push(item.item);
     }
 
-    console.log(`\nDone. Added: ${results.added.length}, Not found: ${results.notFound.length}`);
-    if (results.notFound.length > 0) {
-      console.log('Not found:', results.notFound.join(', '));
-    }
-
+    console.log(`\nDone. Not found: ${notFound.length > 0 ? notFound.join(', ') : 'none'}`);
     await browser.close();
-    return { success: true, notFound: results.notFound };
+    return { success: true, notFound };
 
   } catch (error) {
     console.error('Error:', error.message);
@@ -372,7 +366,7 @@ app.post('/whatsapp', async (req, res) => {
     if (result.success) {
       let msg = `🎉 Done! Checkout:\nmember.restaurantdepot.com/store/business/cart`;
       if (result.notFound && result.notFound.length > 0) {
-        msg += `\n\n⚠️ Not found in order guide:\n${result.notFound.join('\n')}`;
+        msg += `\n\n⚠️ Not found:\n${result.notFound.join('\n')}`;
       }
       await sendWhatsApp(fromNumber, msg);
       await sendConfirmationEmail(parsedOrder, senderName);
