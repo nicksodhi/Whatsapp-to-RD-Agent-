@@ -24,7 +24,6 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Complete Naan & Curry order guide - exact item names from Restaurant Depot
 const ORDER_GUIDE = [
   "Isabella - Petite Diced Tomatoes -#10 cans",
   "Chef's Quality - Tomato Sauce - #10 cans",
@@ -87,20 +86,16 @@ async function parseOrder(message) {
 Here is the EXACT list of items in the Naan & Curry order guide at Restaurant Depot:
 ${ORDER_GUIDE.map((item, i) => `${i + 1}. ${item}`).join('\n')}
 
-The person will text you an order in casual language. Your job is to:
-1. Match what they said to the closest item(s) in the order guide above
-2. Return a JSON array with the exact item name from the list and the quantity
+The person will text you an order in casual language. Match what they said to the closest item(s) in the list above.
 
 Examples:
 - "6 yellow onions" -> [{"item": "Jumbo Spanish Onions - 50 lbs", "quantity": 6}]
 - "need some paneer" -> [{"item": "Royal Mahout - Paneer Loaf - 5 lbs", "quantity": 1}]
-- "10 lbs chicken and 2 bags rice" -> [{"item": "Fresh Chicken Leg Quarters - 40 lbs", "quantity": 1}, {"item": "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs", "quantity": 2}]
 - "garlic and ginger" -> [{"item": "Peeled Garlic", "quantity": 1}, {"item": "Fresh Ginger - 30 lbs", "quantity": 1}]
 
 Rules:
-- Always use the EXACT item name from the list above
+- Always use the EXACT item name from the list
 - If no quantity mentioned, use 1
-- Match the closest item even if phrased differently
 - Return ONLY a JSON array, no explanation, no markdown
 
 Message: "${message}"`
@@ -129,8 +124,8 @@ async function sendConfirmationEmail(orderItems, sender) {
   await transporter.sendMail({
     from: process.env.GMAIL_ADDRESS,
     to: [process.env.YOUR_EMAIL, process.env.RAHUL_EMAIL].join(','),
-    subject: `✅ Restaurant Depot Order Added to Cart - ${new Date().toLocaleDateString()}`,
-    text: `Items were added to the Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout here (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart\n\nThis is an automated message from your Naan & Curry ordering agent.`
+    subject: `✅ Restaurant Depot Cart Updated - ${new Date().toLocaleDateString()}`,
+    text: `Items added to Restaurant Depot cart by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nAdded at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\n\nCheckout (select Pickup):\nhttps://member.restaurantdepot.com/store/business/cart`
   });
 }
 
@@ -147,7 +142,7 @@ async function placeRestaurantDepotOrder(orderItems) {
 
   try {
     // Login
-    console.log('Logging in to Restaurant Depot...');
+    console.log('Logging in...');
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
@@ -163,72 +158,72 @@ async function placeRestaurantDepotOrder(orderItems) {
     console.log('Logged in successfully');
 
     // Go to order guide
-    console.log('Loading Naan & Curry order guide...');
+    console.log('Loading order guide...');
     await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
     });
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(6000);
 
-    // Dismiss any popups/modals that might be blocking
-    try {
-      const closeBtn = await page.$('button[aria-label*="Close"], button[aria-label*="close"], .modal-close, [data-dialog-ref] button');
-      if (closeBtn) {
-        await closeBtn.click();
-        await page.waitForTimeout(1000);
-      }
-      // Press Escape to close any open dialogs
-      await page.keyboard.press('Escape');
-      await page.waitForTimeout(500);
-    } catch(e) { /* no popup */ }
+    // Check how many buttons are on page
+    const btnCount = await page.evaluate(() => {
+      return document.querySelectorAll('button[aria-label*="Add"]').length;
+    });
+    console.log(`Found ${btnCount} Add buttons on page`);
 
-    // Get all Add buttons and their labels
-    const buttons = await page.$$('button[aria-label*="Add"]');
-    const buttonMap = [];
-    for (const btn of buttons) {
-      const label = await btn.getAttribute('aria-label');
-      if (label) buttonMap.push({ label: label.toLowerCase(), btn });
-    }
-    console.log(`Found ${buttonMap.length} items in order guide`);
-
-    // Add each ordered item
+    // Add each item using pure JavaScript - bypasses all overlays
     for (const item of orderItems) {
-      console.log(`Looking for: ${item.item}`);
-      const searchWords = item.item.toLowerCase()
-        .replace(/[^a-z0-9 ]/g, ' ')
-        .split(' ')
-        .filter(w => w.length > 3);
+      console.log(`Adding: ${item.item} x${item.quantity}`);
 
-      let bestMatch = null;
-      let bestScore = 0;
+      const result = await page.evaluate((itemName, qty) => {
+        const searchWords = itemName.toLowerCase()
+          .replace(/[^a-z0-9 ]/g, ' ')
+          .split(' ')
+          .filter(w => w.length > 3);
 
-      for (const { label, btn } of buttonMap) {
-        const score = searchWords.filter(word => label.includes(word)).length;
-        if (score > bestScore) {
-          bestScore = score;
-          bestMatch = { label, btn };
+        const buttons = Array.from(document.querySelectorAll('button[aria-label*="Add"]'));
+        let bestBtn = null;
+        let bestScore = 0;
+
+        for (const btn of buttons) {
+          const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+          const score = searchWords.filter(w => label.includes(w)).length;
+          if (score > bestScore) {
+            bestScore = score;
+            bestBtn = btn;
+          }
         }
-      }
 
-      if (bestMatch && bestScore > 0) {
-        console.log(`Matched to: ${bestMatch.label}`);
-        await bestMatch.btn.click();
+        if (bestBtn && bestScore > 0) {
+          bestBtn.click();
+          return { found: true, label: bestBtn.getAttribute('aria-label'), score: bestScore };
+        }
+        return { found: false, searched: searchWords };
+      }, item.item, item.quantity);
+
+      if (result.found) {
+        console.log(`Clicked: ${result.label}`);
         await page.waitForTimeout(2000);
 
         // Click + for additional quantities
         for (let i = 1; i < item.quantity; i++) {
-          const plusBtn = await page.$('button[aria-label*="Increase"], button[aria-label*="increment"]');
-          if (plusBtn) {
-            await plusBtn.click();
-            await page.waitForTimeout(400);
-          }
+          await page.evaluate(() => {
+            const btns = Array.from(document.querySelectorAll('button'));
+            const plusBtn = btns.find(b =>
+              b.getAttribute('aria-label')?.toLowerCase().includes('increase') ||
+              b.getAttribute('aria-label')?.toLowerCase().includes('increment') ||
+              b.textContent.trim() === '+'
+            );
+            if (plusBtn) plusBtn.click();
+          });
+          await page.waitForTimeout(400);
         }
       } else {
-        console.log(`Could not find: ${item.item}`);
+        console.log(`Not found: ${item.item}, searched: ${JSON.stringify(result.searched)}`);
       }
     }
 
-    console.log('All items added to cart');
+    console.log('Done adding items');
     await browser.close();
     return { success: true };
 
@@ -253,31 +248,31 @@ app.post('/whatsapp', async (req, res) => {
     return;
   }
 
-  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Matching your order to the Naan & Curry order guide...`);
+  await sendWhatsApp(fromNumber, `✅ Got it ${senderName}! Processing your order...`);
 
   try {
     const parsedOrder = await parseOrder(incomingMsg);
 
     if (parsedOrder.error) {
-      await sendWhatsApp(fromNumber, `❓ Couldn't understand that. Try:\n"6 yellow onions, 2 paneer, 1 chicken"`);
+      await sendWhatsApp(fromNumber, `❓ Try: "6 yellow onions, 2 paneer, 1 chicken"`);
       return;
     }
 
     const orderSummary = parsedOrder.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
-    await sendWhatsApp(fromNumber, `📋 Adding to cart:\n\n${orderSummary}\n\nLogging into Restaurant Depot now...`);
+    await sendWhatsApp(fromNumber, `📋 Adding to cart:\n\n${orderSummary}`);
 
     const result = await placeRestaurantDepotOrder(parsedOrder);
 
     if (result.success) {
-      await sendWhatsApp(fromNumber, `🎉 Items added to cart! Select Pickup at checkout:\nmember.restaurantdepot.com/store/business/cart`);
+      await sendWhatsApp(fromNumber, `🎉 Done! Check your cart:\nmember.restaurantdepot.com/store/business/cart`);
       await sendConfirmationEmail(parsedOrder, senderName);
     } else {
-      await sendWhatsApp(fromNumber, `⚠️ Issue adding items.\n\nError: ${result.error}\n\nOrder manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
+      await sendWhatsApp(fromNumber, `⚠️ Error: ${result.error}\n\nOrder manually:\nmember.restaurantdepot.com/store/business/order-guide/19933806363004568`);
     }
 
   } catch (error) {
     console.error('Error:', error);
-    await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Order manually:\nhttps://member.restaurantdepot.com/store/business/order-guide/19933806363004568`);
+    await sendWhatsApp(fromNumber, `⚠️ Something went wrong. Order manually:\nmember.restaurantdepot.com/store/business/order-guide/19933806363004568`);
   }
 });
 
