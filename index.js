@@ -29,7 +29,7 @@ const transporter = nodemailer.createTransport({
 // Parse order using Claude AI
 async function parseOrder(message) {
   const response = await anthropic.messages.create({
-    model: 'claude-opus-4-20250514',
+    model: 'claude-opus-4-5',
     max_tokens: 1000,
     messages: [{
       role: 'user',
