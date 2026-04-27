@@ -176,10 +176,11 @@ async function placeRestaurantDepotOrder(orderItems) {
 
       // Step 1: Find and click the Add button for this item
       const result = await page.evaluate(({ itemName }) => {
+        // Use ALL words including short ones for better matching
         const searchWords = itemName.toLowerCase()
           .replace(/[^a-z0-9 ]/g, ' ')
           .split(' ')
-          .filter(w => w.length > 3);
+          .filter(w => w.length > 2); // Allow 3+ letter words like "whl", "gal"
 
         const buttons = Array.from(document.querySelectorAll('button[aria-label*="Add"]'));
         let bestBtn = null;
@@ -205,25 +206,25 @@ async function placeRestaurantDepotOrder(orderItems) {
         console.log(`Opened modal for: ${result.label}`);
         await page.waitForTimeout(3000); // Wait for modal to open
 
-        // Step 2: Click the Case + button the right number of times
+        // Step 2: Click the Case + button exactly quantity times
+        // The case + button has aria-label containing "Increment case quantity"
         for (let i = 0; i < item.quantity; i++) {
           await page.evaluate(() => {
             const btns = Array.from(document.querySelectorAll('button'));
-            // Find the + button next to "Case of X" - it comes after the case price text
+            // Try aria-label first (most reliable)
             const caseBtn = btns.find(b => {
               const label = (b.getAttribute('aria-label') || '').toLowerCase();
               return label.includes('increment case') || label.includes('increase case');
             });
-            // Fall back: find all + buttons and pick the second one (case row)
-            if (!caseBtn) {
-              const plusBtns = btns.filter(b => b.textContent.trim() === '+');
-              if (plusBtns.length >= 2) plusBtns[1].click(); // second + = case row
-              else if (plusBtns.length === 1) plusBtns[0].click();
-            } else {
+            if (caseBtn) {
               caseBtn.click();
+              return;
             }
+            // Fallback: second + button (Single row is first, Case row is second)
+            const plusBtns = btns.filter(b => b.textContent.trim() === '+');
+            if (plusBtns.length >= 2) plusBtns[1].click();
           });
-          await page.waitForTimeout(600);
+          await page.waitForTimeout(800);
         }
 
         // Step 3: Click "Add X items to cart" button inside the modal
