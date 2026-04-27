@@ -371,7 +371,7 @@ await page.waitForTimeout(3000);
 let cleared = false;
 for (let attempt = 0; attempt < 10; attempt++) {
   const removed = await page.evaluate(() => {
-    const removeBtn = document.querySelector('button[aria-label*="Remove"], button:has-text("Remove")');
+    const removeBtn = document.querySelector('button[aria-label*="Remove"]');
     if (removeBtn) { removeBtn.click(); return true; }
     // Also try text-based
     const btns = Array.from(document.querySelectorAll('button'));
