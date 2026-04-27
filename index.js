@@ -11,13 +11,11 @@ app.use(express.json());
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// Authorized WhatsApp numbers (you and Rahul)
 const AUTHORIZED_NUMBERS = [
   process.env.YOUR_WHATSAPP_NUMBER,
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-// Email setup
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -26,10 +24,9 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Parse order using Claude AI
 async function parseOrder(message) {
   const response = await anthropic.messages.create({
-    model: 'claude-opus-4-5',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 1000,
     messages: [{
       role: 'user',
@@ -56,7 +53,6 @@ If the message is not an order, return: {"error": "not an order"}`
   }
 }
 
-// Send WhatsApp reply
 async function sendWhatsApp(to, message) {
   await twilioClient.messages.create({
     from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER,
@@ -65,27 +61,16 @@ async function sendWhatsApp(to, message) {
   });
 }
 
-// Send email confirmation
 async function sendConfirmationEmail(orderItems, sender) {
   const orderList = orderItems.map(i => `• ${i.quantity} ${i.unit} ${i.item}`).join('\n');
-  
   await transporter.sendMail({
     from: process.env.GMAIL_ADDRESS,
     to: [process.env.YOUR_EMAIL, process.env.RAHUL_EMAIL].join(','),
     subject: `✅ Restaurant Depot Order Placed - ${new Date().toLocaleDateString()}`,
-    text: `A Restaurant Depot pickup order was placed by ${sender}.
-
-ORDER SUMMARY:
-${orderList}
-
-Order placed at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}
-Location: Naan & Curry, Las Vegas
-
-This is an automated confirmation from your Naan & Curry ordering agent.`
+    text: `A Restaurant Depot pickup order was placed by ${sender}.\n\nORDER SUMMARY:\n${orderList}\n\nOrder placed at: ${new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' })}\nLocation: Naan & Curry, Las Vegas\n\nThis is an automated confirmation from your Naan & Curry ordering agent.`
   });
 }
 
-// Place order on Restaurant Depot website
 async function placeRestaurantDepotOrder(orderItems) {
   const browser = await chromium.launch({
     headless: true,
@@ -95,55 +80,61 @@ async function placeRestaurantDepotOrder(orderItems) {
   const page = await browser.newPage();
   
   try {
-    console.log('Navigating to Restaurant Depot...');
-    await page.goto('https://www.restaurantdepot.com', { waitUntil: 'networkidle' });
+    // Go straight to login page
+    console.log('Navigating to Restaurant Depot login...');
+    await page.goto('https://www.restaurantdepot.com/login', { 
+      waitUntil: 'domcontentloaded', 
+      timeout: 30000 
+    });
+    
+    // Wait for JS to render the form
+    await page.waitForTimeout(5000);
+    console.log('Page loaded, waiting for email field...');
 
-    // Login
-    console.log('Logging in...');
-    await page.goto('https://www.restaurantdepot.com/login', { waitUntil: 'networkidle' });
+    await page.waitForSelector('#email', { timeout: 30000 });
+    console.log('Email field found, filling in credentials...');
     
-    await page.waitForSelector('#email', { timeout: 10000 });
     await page.fill('#email', process.env.RD_EMAIL);
+    await page.waitForTimeout(500);
     await page.fill('input[type="password"]', process.env.RD_PASSWORD);
+    await page.waitForTimeout(500);
     await page.click('button[type="submit"]');
-    
-    await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 15000 });
+    await page.waitForTimeout(5000);
     console.log('Logged in successfully');
 
     // Go to Order Guide
     console.log('Going to Order Guide...');
-    await page.goto('https://www.restaurantdepot.com/order-guide', { waitUntil: 'networkidle' });
+    await page.goto('https://www.restaurantdepot.com/order-guide', { 
+      waitUntil: 'domcontentloaded',
+      timeout: 30000 
+    });
+    await page.waitForTimeout(4000);
 
     // Search and add each item
     for (const item of orderItems) {
       console.log(`Adding: ${item.quantity} ${item.unit} of ${item.item}`);
-      
       try {
-        // Search for item in order guide
         const searchBox = await page.$('input[placeholder*="search"], input[type="search"], .search-input');
         if (searchBox) {
           await searchBox.fill(item.item);
           await page.waitForTimeout(2000);
         }
-
-        // Find quantity input and update it
         const qtyInputs = await page.$$('input[type="number"], .quantity-input, input[name*="qty"]');
         if (qtyInputs.length > 0) {
           await qtyInputs[0].fill(item.quantity.toString());
         }
-
         await page.waitForTimeout(1000);
       } catch (err) {
         console.log(`Could not add ${item.item}: ${err.message}`);
       }
     }
 
-    // Add to cart / place order
+    // Place order
     console.log('Placing order...');
     const orderBtn = await page.$('button:has-text("Add to Cart"), button:has-text("Place Order"), .add-to-cart, #place-order');
     if (orderBtn) {
       await orderBtn.click();
-      await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(3000);
     }
 
     console.log('Order placed successfully');
@@ -157,9 +148,8 @@ async function placeRestaurantDepotOrder(orderItems) {
   }
 }
 
-// Main webhook - receives WhatsApp messages
 app.post('/whatsapp', async (req, res) => {
-  res.sendStatus(200); // Respond to Twilio immediately
+  res.sendStatus(200);
 
   const incomingMsg = req.body.Body;
   const fromNumber = req.body.From.replace('whatsapp:', '');
@@ -167,17 +157,14 @@ app.post('/whatsapp', async (req, res) => {
 
   console.log(`Message from ${senderName}: ${incomingMsg}`);
 
-  // Check if authorized
   if (!AUTHORIZED_NUMBERS.includes(fromNumber)) {
     await sendWhatsApp(fromNumber, '❌ Sorry, you are not authorized to place orders.');
     return;
   }
 
-  // Let them know we received it
   await sendWhatsApp(fromNumber, `✅ Got your order ${senderName}! Give me a few minutes to place it on Restaurant Depot...`);
 
   try {
-    // Parse the order with AI
     const parsedOrder = await parseOrder(incomingMsg);
 
     if (parsedOrder.error) {
@@ -188,7 +175,6 @@ app.post('/whatsapp', async (req, res) => {
     const orderSummary = parsedOrder.map(i => `• ${i.quantity} ${i.unit} - ${i.item}`).join('\n');
     await sendWhatsApp(fromNumber, `📋 I understood your order as:\n\n${orderSummary}\n\nPlacing it now...`);
 
-    // Place the order
     const result = await placeRestaurantDepotOrder(parsedOrder);
 
     if (result.success) {
@@ -204,7 +190,6 @@ app.post('/whatsapp', async (req, res) => {
   }
 });
 
-// Health check
 app.get('/', (req, res) => res.send('Naan & Curry Agent is running! 🍛'));
 
 const PORT = process.env.PORT || 3000;
