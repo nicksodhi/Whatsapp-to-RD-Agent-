@@ -43,8 +43,8 @@ const CASE_SIZES = {
 const ITEM_MAP = {
   'yellow onions':      'Jumbo Spanish Onions - 50 lbs',
   'red onions':         'Jumbo Red Onions - 25 lbs',
-  'potato':             'Potato - 50 lb',
-  'potatoes':           'Potato - 50 lb',
+  'potato':             'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
+  'potatoes':           'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
   'garlic':             'Peeled Garlic',
   'ginger':             'Fresh Ginger - 30 lbs',
   'paneer':             'Royal Mahout - Paneer Loaf - 5 lbs',
@@ -145,9 +145,27 @@ async function sendEmail(orderItems, sender) {
   });
 }
 
+// ── MODAL HELPERS ────────────────────────────────────────────────────────────
+
+// FIX 1: Scope increment clicks to the open modal, not the entire page.
+// The original bug: after clicking "Update guide" for Orchid Flowers, the
+// modal sometimes didn't fully close. Subsequent items (Carrots, Lemons,
+// Mint) then found the flowers stepper still in the DOM and kept clicking it,
+// which is why the log showed "increment quantity of micro orchid flowers"
+// for completely unrelated items.
 async function clickIncrementButton(page, preferCase) {
   return await page.evaluate(function(preferCase) {
-    var btns = Array.from(document.querySelectorAll('button'));
+    // Prefer buttons scoped inside the open modal/drawer/dialog.
+    // Fall back to full document only if no modal container is found.
+    var modalRoot = (
+      document.querySelector('[role="dialog"]') ||
+      document.querySelector('[class*="modal" i]') ||
+      document.querySelector('[class*="drawer" i]') ||
+      document.querySelector('[class*="side-panel" i]') ||
+      document.querySelector('[class*="overlay" i]') ||
+      document
+    );
+    var btns = Array.from(modalRoot.querySelectorAll('button'));
     var labeled = btns.map(function(b) {
       return { b: b, l: (b.getAttribute('aria-label') || '').toLowerCase() };
     });
@@ -174,7 +192,13 @@ async function clickIncrementButton(page, preferCase) {
 
 async function hasCaseButton(page) {
   return await page.evaluate(function() {
-    var btns = Array.from(document.querySelectorAll('button'));
+    var modalRoot = (
+      document.querySelector('[role="dialog"]') ||
+      document.querySelector('[class*="modal" i]') ||
+      document.querySelector('[class*="drawer" i]') ||
+      document
+    );
+    var btns = Array.from(modalRoot.querySelectorAll('button'));
     return btns.some(function(b) {
       var l = (b.getAttribute('aria-label') || '').toLowerCase();
       return l.includes('increment case') || l.includes('increase case');
@@ -182,16 +206,43 @@ async function hasCaseButton(page) {
   });
 }
 
+// FIX 2: Wait for the modal to fully close before moving on to the next item.
+// The original bug: after clicking "Update guide", the code did a fixed
+// waitForTimeout(1500) but didn't verify the modal actually disappeared.
+// The next item's stepper clicks then landed on the still-visible modal.
+async function waitForModalClose(page) {
+  for (var i = 0; i < 25; i++) {
+    await page.waitForTimeout(300);
+    var isOpen = await page.evaluate(function() {
+      var btns = Array.from(document.querySelectorAll('button'));
+      return btns.some(function(b) {
+        var l = (b.getAttribute('aria-label') || '').toLowerCase();
+        return l.includes('increment') || l.includes('increase');
+      });
+    });
+    if (!isOpen) {
+      await page.waitForTimeout(300); // one extra tick for DOM to settle
+      return;
+    }
+  }
+  // Force close if still open after timeout
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(600);
+}
+
+// ── ITEM ADDER ───────────────────────────────────────────────────────────────
+
 async function addItem(page, item) {
   var isSingle = SINGLE_ONLY_ITEMS.indexOf(item.item) !== -1;
   var caseSize = CASE_SIZES[item.item] || 1;
   console.log('\n[' + item.item + '] qty=' + item.quantity + ' single=' + isSingle + ' caseSize=' + caseSize);
 
-  // Close any stale modal
+  // Ensure any previous modal is fully closed before starting
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
+  await waitForModalClose(page);
 
-  // Find and click best matching Add button
+  // Find and click the best-matching "Add" button for this item
   var matched = await page.evaluate(function(itemName) {
     var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
       return w.length >= 3 && ['lbs', 'pkg', 'and', 'the', 'for', 'all', 'out', 'can', 'dry', 'qty', 'per'].indexOf(w) === -1;
@@ -215,12 +266,18 @@ async function addItem(page, item) {
   if (!matched) { console.log('  NOT FOUND'); return false; }
   console.log('  Matched: ' + matched);
 
-  // Wait for modal to appear
+  // Wait for a modal to appear
   var modalType = null;
   for (var attempt = 0; attempt < 20; attempt++) {
     await page.waitForTimeout(400);
     modalType = await page.evaluate(function() {
-      var btns = Array.from(document.querySelectorAll('button'));
+      var modalRoot = (
+        document.querySelector('[role="dialog"]') ||
+        document.querySelector('[class*="modal" i]') ||
+        document.querySelector('[class*="drawer" i]') ||
+        document
+      );
+      var btns = Array.from(modalRoot.querySelectorAll('button'));
       var labels = btns.map(function(b) { return (b.getAttribute('aria-label') || '').toLowerCase(); });
       if (labels.some(function(l) { return l.includes('increment'); })) return 'stepper';
       var opts = Array.from(document.querySelectorAll('[role="option"]'));
@@ -233,15 +290,45 @@ async function addItem(page, item) {
   console.log('  Modal: ' + modalType);
   if (!modalType) { console.log('  Modal never appeared'); return false; }
 
+  // FIX 3: Verify the open modal is for THIS item before touching any steppers.
+  // The original bug: the flowers modal would stay open; the next item's button
+  // click was registered but the modal that was visible still belonged to flowers.
+  // clickIncrementButton then clicked the flowers stepper for carrots, lemons, mint.
+  if (modalType === 'stepper') {
+    var itemWords = item.item.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
+      return w.length >= 4;
+    });
+    var correctModal = await page.evaluate(function(words) {
+      var modalRoot = (
+        document.querySelector('[role="dialog"]') ||
+        document.querySelector('[class*="modal" i]') ||
+        document.querySelector('[class*="drawer" i]') ||
+        document
+      );
+      var btns = Array.from(modalRoot.querySelectorAll('button'));
+      var labels = btns.map(function(b) { return (b.getAttribute('aria-label') || '').toLowerCase(); });
+      var incrementLabels = labels.filter(function(l) { return l.includes('increment'); });
+      // At least one keyword from the item name must appear in the stepper labels
+      return words.some(function(w) {
+        return incrementLabels.some(function(l) { return l.includes(w); });
+      });
+    }, itemWords);
+
+    if (!correctModal) {
+      console.log('  WRONG MODAL — closing and skipping');
+      await page.keyboard.press('Escape');
+      await waitForModalClose(page);
+      return false;
+    }
+  }
+
   // ── SET QUANTITY ──────────────────────────────────────────────────────────
 
   if (modalType === 'listbox') {
-    // Listbox numbers represent individual units — use exact quantity as-is
     var listResult = await page.evaluate(function(qty) {
       var options = Array.from(document.querySelectorAll('[role="option"]'));
       var target = options.find(function(o) { return o.textContent.trim() === String(qty); });
       if (target) { target.click(); return 'selected ' + qty; }
-      // qty > 9: use Custom Amount
       var custom = options.find(function(o) { return o.textContent.toLowerCase().includes('custom'); });
       if (custom) { custom.click(); return 'custom'; }
       return 'not found';
@@ -268,23 +355,18 @@ async function addItem(page, item) {
 
   } else {
     // STEPPER — decide how many times to click and which button to use
-
     var useCaseBtn = false;
     var clickCount = item.quantity;
 
     if (isSingle) {
-      // True single item (mint, flowers, etc.) — always click single+
       useCaseBtn = false;
       clickCount = item.quantity;
     } else {
-      // Case item — check if a case+ button exists
       var caseExists = await hasCaseButton(page);
       if (caseExists) {
-        // Case+ button found: click it N times (N = cases ordered, UI handles unit math)
         useCaseBtn = true;
         clickCount = item.quantity;
       } else {
-        // No case+ button: must click single+ (caseSize × quantity) times
         useCaseBtn = false;
         clickCount = item.quantity * caseSize;
       }
@@ -299,39 +381,75 @@ async function addItem(page, item) {
   }
 
   // ── CONFIRM ───────────────────────────────────────────────────────────────
-  await page.waitForTimeout(700);
+  // FIX 4: Give the UI more time to update the button text before we read it,
+  // and increase retry count. The original bug: for many items the "Add N items
+  // to cart" button hadn't updated from 0 yet when we first checked, so we fell
+  // through to "Update guide" — which saves to the order guide but never adds
+  // to cart. That's why Yogurt (4→1), Chicken Breasts (3→1), Flour (5→1),
+  // Rice (4→1), and Fry Oil (2→1) all showed wrong quantities.
+  await page.waitForTimeout(1200);
   var confirmed = null;
-  for (var confirmTry = 0; confirmTry < 3; confirmTry++) {
+  for (var confirmTry = 0; confirmTry < 5; confirmTry++) {
     if (confirmTry > 0) {
       console.log('  Confirm retry ' + confirmTry);
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1200);
     }
     confirmed = await page.evaluate(function() {
-    // Reverse so we find the modal button (near bottom) before the order guide button (near top)
-    var btns = Array.from(document.querySelectorAll('button')).reverse();
-    var cartBtns = btns.filter(function(b) { return /to cart|update/i.test(b.textContent); });
-    // Log for debugging
-    var labels = cartBtns.map(function(b) { return b.textContent.trim(); }).join(' | ');
-    console.log('CART_BTNS:' + labels);
-    // Find button with count > 0 (anything is fine — reversed so modal comes first)
-    for (var i = 0; i < cartBtns.length; i++) {
-      var m = cartBtns[i].textContent.match(/Add (\d+)/i);
-      if (m && +m[1] > 0 && +m[1] < 50) { cartBtns[i].click(); return cartBtns[i].textContent.trim(); }
+      // Reverse so we find the modal button (near bottom of DOM) before the
+      // order guide bulk button (near top of page).
+      var btns = Array.from(document.querySelectorAll('button')).reverse();
+      var cartBtns = btns.filter(function(b) { return /to cart|update/i.test(b.textContent); });
+      var labels = cartBtns.map(function(b) { return b.textContent.trim(); }).join(' | ');
+      console.log('CART_BTNS:' + labels);
+
+      // Priority 1: "Add N items to cart" where N > 0 and is not the bulk button
+      // (bulk button typically says "Add 54 items to cart" or similar large number)
+      for (var i = 0; i < cartBtns.length; i++) {
+        var m = cartBtns[i].textContent.match(/Add (\d+)/i);
+        if (m && +m[1] > 0 && +m[1] < 50) { cartBtns[i].click(); return cartBtns[i].textContent.trim(); }
+      }
+      // Priority 2: Plain "Add to cart" (no number) — means item being added fresh
+      var plain = btns.find(function(b) { return /^add to cart$/i.test(b.textContent.trim()); });
+      if (plain) { plain.click(); return 'Add to cart'; }
+      // Priority 3: "Update guide" — only as last resort; this saves to the order
+      // guide but does NOT add to cart. We log a warning so it's visible.
+      var upd = btns.find(function(b) {
+        return /update guide/i.test(b.textContent) && !/add \d+ items/i.test(b.textContent);
+      });
+      if (upd) { upd.click(); return 'UPDATE_GUIDE_ONLY:' + upd.textContent.trim(); }
+      return null;
+    });
+    // If we got a real cart confirmation (not just guide update), break immediately
+    if (confirmed && !confirmed.startsWith('UPDATE_GUIDE_ONLY:')) break;
+    // If only "Update guide" was available, keep retrying to see if "Add to cart" appears
+    if (confirmed && confirmed.startsWith('UPDATE_GUIDE_ONLY:')) {
+      console.log('  WARNING: Only "Update guide" found on try ' + (confirmTry + 1) + ' — retrying for Add to cart');
+      confirmed = null; // reset and retry
     }
-    // Plain "Add to cart" with no number
-    var plain = btns.find(function(b) { return /^add to cart$/i.test(b.textContent.trim()); });
-    if (plain) { plain.click(); return 'Add to cart'; }
-    // Update cart (item already in cart)
-    var upd = btns.find(function(b) { return /update/i.test(b.textContent); });
-    if (upd) { upd.click(); return upd.textContent.trim(); }
-    return null;
-  });
-    if (confirmed) break;
   }
+
+  // FIX 5: If we exhausted retries and never got "Add to cart", that item was NOT
+  // added to cart. Log it clearly and return false so it goes in the notFound list.
+  if (!confirmed) {
+    console.log('  FAILED: No add-to-cart button found after retries');
+    await page.keyboard.press('Escape');
+    await waitForModalClose(page);
+    return false;
+  }
+  if (confirmed.startsWith('UPDATE_GUIDE_ONLY:')) {
+    console.log('  WARNING: Item saved to order guide only, not added to cart: ' + confirmed);
+    await waitForModalClose(page);
+    return false; // treat as failure so caller includes it in notFound
+  }
+
   console.log('  Confirmed: ' + confirmed);
-  await page.waitForTimeout(1500);
-  return !!confirmed;
+
+  // FIX 6: Wait for modal to fully close before moving to the next item.
+  await waitForModalClose(page);
+  return true;
 }
+
+// ── ORDER PLACER ─────────────────────────────────────────────────────────────
 
 async function placeOrder(orderItems) {
   var browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
@@ -391,6 +509,9 @@ async function placeOrder(orderItems) {
       if (!ok) notFound.push(orderItems[j].item);
     }
 
+    // FIX 7: Log actual failures accurately. The original code printed
+    // "Not found: none" even when Cauliflower hit NOT FOUND in the log,
+    // because addItem() was returning true in some failure paths.
     console.log('Done. Not found: ' + (notFound.length ? notFound.join(', ') : 'none'));
     await browser.close();
     return { success: true, notFound: notFound };
@@ -401,6 +522,8 @@ async function placeOrder(orderItems) {
     return { success: false, error: e.message };
   }
 }
+
+// ── WHATSAPP WEBHOOK ─────────────────────────────────────────────────────────
 
 app.post('/whatsapp', async function(req, res) {
   res.sendStatus(200);
@@ -430,7 +553,7 @@ app.post('/whatsapp', async function(req, res) {
     if (result.success) {
       var reply = 'Done! Checkout:\nmember.restaurantdepot.com/store/business/cart';
       if (result.notFound && result.notFound.length) {
-        reply += '\n\nNot found in order guide:\n' + result.notFound.join('\n');
+        reply += '\n\nNot added — needs manual fix:\n' + result.notFound.map(function(n) { return '• ' + n; }).join('\n');
       }
       await sendWhatsApp(from, reply);
       await sendEmail(order, name);
