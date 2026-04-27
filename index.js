@@ -17,62 +17,6 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER
 ];
 
-// Direct product URLs - bypass order guide modal issues entirely
-// Format: item name -> { url, type: 'case'|'single', itemsPerCase }
-const ITEM_URLS = {
-  "Jumbo Red Onions - 25 lbs":           { url: "/store/jetro-restaurant-depot/products/51274775-jumbo-red-onions-25-lbs-25-lb", type: "single" },
-  "Russet Potato - 50 lb Bag, 6oz Min, US #2": { url: "/store/jetro-restaurant-depot/products/51274782-russet-potato-50-lb-bag-6oz-min-us-2", type: "single" },
-  "Peeled Garlic":                        { url: "/store/jetro-restaurant-depot/products/19189686-peeled-garlic", type: "case" },
-  "Fresh Ginger - 30 lbs":               { url: "/store/jetro-restaurant-depot/products/51274783-fresh-ginger-30-lbs-30-lb", type: "single" },
-  "Royal Mahout - Paneer Loaf - 5 lbs":  { url: "/store/jetro-restaurant-depot/products/85900000-royal-mahout-paneer-loaf-5-lbs-5-lb", type: "case" },
-  "Micro Orchid Flowers - 4 oz":         { url: "/store/jetro-restaurant-depot/products/84046513269-micro-orchid-flowers-4-oz", type: "single" },
-  "Taylor Farms - Bagged Cilantro":      { url: "/store/jetro-restaurant-depot/products/30224301456-taylor-farms-bagged-cilantro", type: "single" },
-  "Cucumbers - 6 ct":                    { url: "/store/jetro-restaurant-depot/products/72906299106-cucumbers-6-ct", type: "single" },
-  "White Cauliflower":                   { url: "/store/jetro-restaurant-depot/products/2060042606-white-cauliflower", type: "case" },
-  "Carrots- 10 lb":                      { url: "/store/jetro-restaurant-depot/products/2060079152-carrots-10-lb", type: "single" },
-  "Lemons, 71-115 ct":                   { url: "/store/jetro-restaurant-depot/products/2060042570-lemons-71-115-ct", type: "single" },
-  "Herb - Mint- 1lb":                    { url: "/store/jetro-restaurant-depot/products/85434200407-herb-mint-1lb", type: "single" },
-  "James Farm - Heavy Cream, 40% - 64 oz": { url: "/store/jetro-restaurant-depot/products/76069502990-james-farm-heavy-cream-40-64-oz", type: "case" },
-  "MILK WHL GAL GS/AN":                  { url: "/store/jetro-restaurant-depot/products/7911710101-milk-whl-gal-gs-an", type: "case" },
-  "James Farm - Plain Yogurt - 32 lbs":  { url: "/store/jetro-restaurant-depot/products/60695005751-james-farm-plain-yogurt-32-lbs", type: "single" },
-  "James Farm - Shredded Cheddar Jack Cheese - 5 lbs": { url: "/store/jetro-restaurant-depot/products/76069500868-james-farm-shredded-cheddar-jack-cheese-5-lbs", type: "case" },
-  "Boneless, Skinless Chicken Breasts, Tenders Out, Dry": { url: "/store/jetro-restaurant-depot/products/20772300000-boneless-skinless-chicken-breasts-tenders-out-dry", type: "single" },
-  "Boneless, Skinless Jumbo Chicken Thighs": { url: "/store/jetro-restaurant-depot/products/20776820000-boneless-skinless-jumbo-chicken-thighs", type: "single" },
-  "Fresh Chicken Leg Quarters - 40 lbs": { url: "/store/jetro-restaurant-depot/products/20776700000-fresh-chicken-leg-quarters-40-lbs", type: "single" },
-  "Jumbo Chicken Party Wings (6-8 ct)":  { url: "/store/jetro-restaurant-depot/products/20772000000-jumbo-chicken-party-wings-6-8-ct", type: "single" },
-  "Fresh Boneless Skinless Chicken Leg Meat": { url: "/store/jetro-restaurant-depot/products/20776580000-fresh-boneless-skinless-chicken-leg-meat", type: "single" },
-  "Frozen Halal Boneless Lamb Leg, Australia": { url: "/store/jetro-restaurant-depot/products/20790420000-frozen-halal-boneless-lamb-leg-australia", type: "single" },
-  "Thomas Farms - Bone in Goat Cube - #15": { url: "/store/jetro-restaurant-depot/products/81009537357-thomas-farms-bone-in-goat-cube-15", type: "single" },
-  "Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs": { url: "/store/jetro-restaurant-depot/products/6069551457-frozen-tilapia-fillets-3-5-oz-iqf-china-10-lbs", type: "case" },
-  "Frozen James Farm - Frozen Chopped Spinach - 3 lbs": { url: "/store/jetro-restaurant-depot/products/76069501045-frozen-james-farm-frozen-chopped-spinach-3-lbs", type: "case" },
-  "Frozen James Farm - IQF Broccoli Florets - 2 lbs": { url: "/store/jetro-restaurant-depot/products/76069502007-frozen-james-farm-iqf-broccoli-florets-2-lbs", type: "case" },
-  "Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs": { url: "/store/jetro-restaurant-depot/products/76069501000-frozen-james-farm-iqf-mixed-vegetables-2-5-lbs", type: "case" },
-  "Frozen James Farm - IQF Peas - 2.5 lbs": { url: "/store/jetro-restaurant-depot/products/76069501542-frozen-james-farm-iqf-peas-2-5-lbs", type: "case" },
-  "Golden Temple - Durum Atta Flour - 2/20 lb Bag": { url: "/store/jetro-restaurant-depot/products/5900041556-golden-temple-durum-atta-flour-2-20-lb-bag", type: "case" },
-  "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag": { url: "/store/jetro-restaurant-depot/products/76069502574-chef-s-quality-hotel-restaurant-all-purpose-flour-25-lb-bag", type: "single" },
-  "Clabber Girl - Baking Powder - 5 lbs": { url: "/store/jetro-restaurant-depot/products/1990000350-clabber-girl-baking-powder-5-lbs", type: "case" },
-  "Clabber Girl Cornstarch - 3 lbs":     { url: "/store/jetro-restaurant-depot/products/1990061997-clabber-girl-cornstarch-3-lbs", type: "case" },
-  "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs": { url: "/store/jetro-restaurant-depot/products/74504200010-royal-chef-s-secret-extra-long-grain-basmati-rice-40-lbs", type: "single" },
-  "Royal - Chef's Secret Sela Basmati Rice - 40 lbs": { url: "/store/jetro-restaurant-depot/products/74504200014-royal-chef-s-secret-sela-basmati-rice-40-lbs", type: "single" },
-  "Chef's Quality - Garbanzo Beans - #10 can": { url: "/store/jetro-restaurant-depot/products/76069501473-chef-s-quality-garbanzo-beans-10-can", type: "case" },
-  "Chef's Quality - Dark Red Kidney Beans - #10 cans": { url: "/store/jetro-restaurant-depot/products/76069501474-chef-s-quality-dark-red-kidney-beans-10-cans", type: "case" },
-  "Morton - Purex Salt - 50lb":          { url: "/store/jetro-restaurant-depot/products/2460021512-morton-purex-salt-50lb", type: "single" },
-  "C&H - Granulated Sugar - 25 lbs":    { url: "/store/jetro-restaurant-depot/products/1580003021-c-h-granulated-sugar-25-lbs", type: "single" },
-  "Chef's Quality - Tomato Sauce - #10 cans": { url: "/store/jetro-restaurant-depot/products/76069500922-chef-s-quality-tomato-sauce-10-cans", type: "case" },
-  "Isabella - Petite Diced Tomatoes -#10 cans": { url: "/store/jetro-restaurant-depot/products/76069502533-isabella-petite-diced-tomatoes-10-cans", type: "case" },
-  "Chef's Quality - Liquid Butter Alternative - gallon": { url: "/store/jetro-restaurant-depot/products/76069501615-chef-s-quality-liquid-butter-alternative-gallon", type: "case" },
-  "Chef's Quality - Soybean Salad Oil - 35 lbs": { url: "/store/jetro-restaurant-depot/products/76069500931-chef-s-quality-soybean-salad-oil-35-lbs", type: "single" },
-  "Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs": { url: "/store/jetro-restaurant-depot/products/76069500481-chef-s-quality-clear-liquid-fry-oil-zero-trans-fats-35-lbs", type: "single" },
-  "Chef's Quality - 100% Canola Salad Oil - 35 lbs": { url: "/store/jetro-restaurant-depot/products/76069500935-chef-s-quality-100-canola-salad-oil-35-lbs", type: "single" },
-  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz": { url: "/store/jetro-restaurant-depot/products/2446306124-huy-fong-sambal-olek-ground-chili-paste-3-136-oz", type: "case" },
-  "Chef's Quality - Lemon Juice - gallon": { url: "/store/jetro-restaurant-depot/products/76069500330-chef-s-quality-lemon-juice-gallon", type: "case" },
-  "Felbro - Red Food Coloring - gallon": { url: "/store/jetro-restaurant-depot/products/4940500120-felbro-red-food-coloring-gallon", type: "case" },
-  "Evian - Natural Spring Water, 24 Ct, 500 mL": { url: "/store/jetro-restaurant-depot/products/9437910130-evian-natural-spring-water-24-ct-500-ml", type: "case" },
-  "Sprite Bottles, 16.9 fl oz, 4 Pack":  { url: "/store/jetro-restaurant-depot/products/4900002470-sprite-bottles-16-9-fl-oz-4-pack", type: "case" },
-  "Diet Coke Bottles, 16.9 fl oz, 24 Pack": { url: "/store/jetro-restaurant-depot/products/4900002469-diet-coke-bottles-16-9-fl-oz-24-pack", type: "single" },
-  "Jumbo Spanish Onions - 50 lbs":       { url: "/store/jetro-restaurant-depot/products/2060042545-jumbo-spanish-onions-50-lbs", type: "single" },
-};
-
 const ITEM_MAP = {
   "yellow onions": "Jumbo Spanish Onions - 50 lbs",
   "red onions": "Jumbo Red Onions - 25 lbs",
@@ -192,82 +136,153 @@ async function sendConfirmationEmail(orderItems, sender) {
   });
 }
 
-async function addItemViaProductPage(page, item) {
-  const info = ITEM_URLS[item.item];
-  if (!info) {
-    console.log(`  No URL for: ${item.item}`);
+async function addItem(page, item) {
+  console.log(`\n--- ${item.item} x${item.quantity} ---`);
+
+  // Close any open modal first by pressing Escape
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(500);
+
+  // Find matching Add button on order guide
+  const found = await page.evaluate(({ itemName }) => {
+    const searchWords = itemName.toLowerCase()
+      .replace(/[^a-z0-9 ]/g, ' ')
+      .split(' ')
+      .filter(w => w.length > 2);
+
+    const buttons = Array.from(document.querySelectorAll('button[aria-label*="Add"]'));
+    let bestBtn = null;
+    let bestScore = 0;
+
+    for (const btn of buttons) {
+      const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+      const score = searchWords.filter(w => label.includes(w)).length;
+      if (score > bestScore) {
+        bestScore = score;
+        bestBtn = btn;
+      }
+    }
+
+    if (bestBtn && bestScore > 0) {
+      bestBtn.click();
+      return { label: bestBtn.getAttribute('aria-label'), score: bestScore };
+    }
+    return null;
+  }, { itemName: item.item });
+
+  if (!found) {
+    console.log(`  NOT FOUND`);
+    return false;
+  }
+  console.log(`  Opened: ${found.label}`);
+
+  // Wait for modal - specifically wait for the input stepper to appear
+  // The modal has number inputs for single and case quantities
+  let modalType = null;
+  for (let attempt = 0; attempt < 15; attempt++) {
+    await page.waitForTimeout(400);
+    modalType = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('button'));
+      const labels = btns.map(b => (b.getAttribute('aria-label') || '').toLowerCase());
+      if (labels.some(l => l.includes('increment case'))) return 'case';
+      if (labels.some(l => l.includes('increment single'))) return 'single-case';
+      if (labels.some(l => l.includes('increment'))) return 'single';
+      // Check for + buttons as fallback
+      const plusBtns = btns.filter(b => b.textContent.trim() === '+');
+      if (plusBtns.length > 0) return `plus-${plusBtns.length}`;
+      return null;
+    });
+    if (modalType) break;
+  }
+  console.log(`  Modal type: ${modalType}`);
+
+  if (!modalType) {
+    console.log(`  Modal never loaded`);
     return false;
   }
 
-  const fullUrl = `https://member.restaurantdepot.com${info.url}`;
-  console.log(`  Going to product page...`);
-  
-  await page.goto(fullUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await page.waitForTimeout(3000);
-
-  // Click the right + button based on type
+  // Click the right button based on modal type
   for (let i = 0; i < item.quantity; i++) {
-    if (info.type === 'case') {
-      // Wait for and click the case increment button
-      try {
-        await page.waitForSelector('button[aria-label*="Increment case"], button[aria-label*="increment case"], button[aria-label*="Increase case"]', { timeout: 5000 });
-        await page.click('button[aria-label*="Increment case"], button[aria-label*="increment case"], button[aria-label*="Increase case"]');
-        console.log(`  Click ${i+1}/${item.quantity}: case`);
-      } catch {
-        // Try second + button
-        const plusBtns = await page.$$('button:has-text("+")');
-        if (plusBtns.length >= 2) {
-          await plusBtns[1].click();
-          console.log(`  Click ${i+1}/${item.quantity}: case-fallback`);
-        } else if (plusBtns.length === 1) {
-          await plusBtns[0].click();
-          console.log(`  Click ${i+1}/${item.quantity}: single-only`);
-        }
+    const clicked = await page.evaluate(({ modalType }) => {
+      const btns = Array.from(document.querySelectorAll('button'));
+
+      // Case button (items sold in cases)
+      if (modalType === 'case' || modalType === 'single-case') {
+        const caseBtn = btns.find(b => (b.getAttribute('aria-label') || '').toLowerCase().includes('increment case'));
+        if (caseBtn) { caseBtn.click(); return 'case'; }
       }
-    } else {
-      // Single item — click first + button
-      try {
-        await page.waitForSelector('button[aria-label*="Increment single"], button[aria-label*="increment single"]', { timeout: 3000 });
-        await page.click('button[aria-label*="Increment single"], button[aria-label*="increment single"]');
-        console.log(`  Click ${i+1}/${item.quantity}: single`);
-      } catch {
-        const plusBtns = await page.$$('button:has-text("+")');
-        if (plusBtns.length > 0) {
-          await plusBtns[0].click();
-          console.log(`  Click ${i+1}/${item.quantity}: single-fallback`);
-        }
+
+      // Single button
+      if (modalType === 'single' || modalType === 'single-case') {
+        const singleBtn = btns.find(b => (b.getAttribute('aria-label') || '').toLowerCase().includes('increment single'));
+        if (singleBtn) { singleBtn.click(); return 'single'; }
       }
-    }
-    await page.waitForTimeout(600);
+
+      // Fallback: + buttons
+      const plusBtns = btns.filter(b => b.textContent.trim() === '+');
+      if (modalType && modalType.startsWith('plus-')) {
+        const count = parseInt(modalType.split('-')[1]);
+        if (count >= 2) { plusBtns[1].click(); return 'plus-case'; }
+        if (count === 1) { plusBtns[0].click(); return 'plus-single'; }
+      }
+
+      return 'none';
+    }, { modalType });
+
+    console.log(`  [${i+1}/${item.quantity}] ${clicked}`);
+    await page.waitForTimeout(500);
   }
 
-  // Click the Add to cart button
-  await page.waitForTimeout(500);
-  try {
-    // Find the active add to cart button (not disabled, has count > 0)
-    const confirmed = await page.evaluate(() => {
-      const btns = Array.from(document.querySelectorAll('button'));
-      // Find button with "items to cart" and count > 0
-      for (const btn of btns) {
-        const text = btn.textContent.trim();
-        const match = text.match(/Add (\d+) items? to cart/i);
-        if (match && parseInt(match[1]) > 0 && !btn.disabled) {
+  // Now click Add to cart — find the modal's button specifically
+  // Key: look for button containing "items to cart" with number matching our quantity
+  await page.waitForTimeout(800);
+
+  const confirmed = await page.evaluate(({ qty }) => {
+    const btns = Array.from(document.querySelectorAll('button'));
+    const results = [];
+
+    for (const btn of btns) {
+      const text = btn.textContent.trim();
+      if (text.toLowerCase().includes('to cart')) {
+        results.push(text);
+      }
+    }
+
+    // Log all cart buttons for debugging
+    console.log('Cart buttons found:', results.join(' | '));
+
+    // Find button with our quantity (or close to it)
+    for (const btn of btns) {
+      const text = btn.textContent.trim();
+      const match = text.match(/Add (\d+) items? to cart/i);
+      if (match) {
+        const count = parseInt(match[1]);
+        // The modal button should have count = qty * itemsPerCase
+        // It must be less than the total order guide items (50+)
+        if (count > 0 && count < 50) {
           btn.click();
           return text;
         }
       }
-      // Fallback: "Add to cart"
-      const simple = btns.find(b => b.textContent.trim() === 'Add to cart' && !b.disabled);
-      if (simple) { simple.click(); return 'Add to cart'; }
-      return null;
-    });
-    console.log(`  Confirmed: ${confirmed}`);
-  } catch(e) {
-    console.log(`  Confirm error: ${e.message}`);
-  }
+    }
 
+    // Fallback: simple "Add to cart"
+    const simple = btns.find(b => {
+      const t = b.textContent.trim();
+      return t === 'Add to cart' || t === 'Add 0 items to cart';
+    });
+    // Only click if it's not "Add 0"
+    if (simple && !simple.textContent.includes('0')) {
+      simple.click();
+      return simple.textContent.trim();
+    }
+
+    return null;
+  }, { qty: item.quantity });
+
+  console.log(`  Confirmed: ${confirmed}`);
   await page.waitForTimeout(1500);
-  return true;
+  return !!confirmed;
 }
 
 async function placeRestaurantDepotOrder(orderItems) {
@@ -281,8 +296,12 @@ async function placeRestaurantDepotOrder(orderItems) {
   });
   const page = await context.newPage();
 
+  // Capture browser console logs
+  page.on('console', msg => {
+    if (msg.text().includes('Cart buttons')) console.log(`  BROWSER: ${msg.text()}`);
+  });
+
   try {
-    // Login
     console.log('Logging in...');
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', {
       waitUntil: 'domcontentloaded', timeout: 30000
@@ -297,10 +316,16 @@ async function placeRestaurantDepotOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in');
 
+    console.log('Loading order guide...');
+    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', {
+      waitUntil: 'domcontentloaded', timeout: 30000
+    });
+    await page.waitForTimeout(6000);
+    console.log(`Order guide loaded`);
+
     const notFound = [];
     for (const item of orderItems) {
-      console.log(`\n--- ${item.item} x${item.quantity} ---`);
-      const success = await addItemViaProductPage(page, item);
+      const success = await addItem(page, item);
       if (!success) notFound.push(item.item);
     }
 
