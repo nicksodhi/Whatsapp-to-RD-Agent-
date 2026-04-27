@@ -90,10 +90,13 @@ const ITEM_MAP = {
 
 async function parseOrder(message) {
   const itemMapStr = Object.entries(ITEM_MAP).map(([k,v]) => `"${k}" -> "${v}"`).join('\n');
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 2000,
-    messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
+  
+  try {
+    const response = await anthropic.messages.create({
+      // FIX 1: Using the stable, fast Haiku model so it doesn't crash
+      model: 'claude-3-haiku-20240307',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: `You are an ordering assistant for Naan & Curry restaurant.
 
 Item mapping:
 ${itemMapStr}
@@ -107,10 +110,18 @@ Rules:
 Format: [{"item": "exact name from map", "quantity": NUMBER}]
 
 Order: ${message}` }]
-  });
-  try {
-    return JSON.parse(response.content[0].text.trim().replace(/\`\`\`json|\`\`\`/g, '').trim());
-  } catch { return { error: true }; }
+    });
+
+    // FIX 2: Robust JSON extractor prevents conversational text from breaking the parser
+    const text = response.content[0].text;
+    const match = text.match(/\[[\s\S]*\]/); 
+    const jsonStr = match ? match[0] : text;
+    return JSON.parse(jsonStr);
+
+  } catch (err) { 
+    console.error("AI Error:", err.message);
+    return { error: true, details: err.message }; 
+  }
 }
 
 async function sendWhatsApp(to, body) {
@@ -140,7 +151,6 @@ async function addItem(page, item) {
     for (const btn of document.querySelectorAll('button')) {
       const label = (btn.getAttribute('aria-label') || '').toLowerCase();
       if (!label) continue;
-      
       const score = words.filter(w => label.includes(w)).length + priority.filter(w => label.includes(w)).length * 3;
       if (score > bestScore) { bestScore = score; best = btn; }
     }
@@ -151,7 +161,6 @@ async function addItem(page, item) {
   if (!found) { console.log('  NOT FOUND'); return false; }
   console.log(`  Matched: ${found}`);
 
-  // Wait up to 8 seconds for modal
   let modalReady = false;
   for (let i = 0; i < 20; i++) {
     await page.waitForTimeout(400);
@@ -165,8 +174,11 @@ async function addItem(page, item) {
     });
     if (modalReady) break;
   }
-  console.log(`  Modal: ${modalReady}`);
+  
   if (!modalReady) { console.log('  Modal failed'); return false; }
+
+  // FIX 3: 1.5 second mandatory breath so the site doesn't swallow clicks
+  await page.waitForTimeout(1500);
 
   if (modalReady === 'listbox') {
     const result = await page.evaluate((qty) => {
@@ -177,7 +189,6 @@ async function addItem(page, item) {
       if (custom) { custom.click(); return 'custom'; }
       return 'not found';
     }, item.quantity);
-    console.log(`  Listbox: ${result}`);
     if (result === 'custom') {
       await page.waitForTimeout(400);
       const input = await page.$('input[type="number"], input[inputmode="numeric"]');
@@ -196,75 +207,36 @@ async function addItem(page, item) {
     await page.waitForTimeout(600);
 
   } else {
-    // Stepper buttons
-    let currentQty = 1; 
-    const match = found.match(/(\d+)\s*ct/i) || found.match(/(\d+)\s*in cart/i);
-    if (match) {
-        currentQty = parseInt(match[1], 10);
-    }
-    
-    let clicksNeeded = item.quantity - currentQty;
-    console.log(`  Target: ${item.quantity}, Current: ${currentQty}, Clicks needed: ${clicksNeeded}`);
-
-    // FIX: Wait a solid 1.5 seconds so the website's cart network requests finish.
-    // If we click '+' too fast, the website swallows the click entirely (which broke Mint).
-    await page.waitForTimeout(1500);
-
-    if (clicksNeeded > 0) {
-      for (let i = 0; i < clicksNeeded; i++) {
-        const clicked = await page.evaluate((isSingle) => {
-          const btns = Array.from(document.querySelectorAll('button'));
-          const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
-          if (!isSingle) {
-            const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
-            if (c) { c.b.click(); return 'case'; }
-          }
-          const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
-          if (s) { s.b.click(); return 'single'; }
-          const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
-          if (any) {
-            if (isSingle) { any.b.click(); return 'any-single'; }
-            any.b.click(); return 'any';
-          }
-          const plus = btns.filter(b => b.textContent.trim() === '+');
-          if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
-          if (plus.length >= 1) { plus[0].click(); return '+first'; }
-          return 'none';
-        }, isSingle);
-        console.log(`  [+ ${i+1}/${clicksNeeded}] ${clicked}`);
-        await page.waitForTimeout(800);
-      }
-    } else if (clicksNeeded < 0) {
-      const absClicks = Math.abs(clicksNeeded);
-      for (let i = 0; i < absClicks; i++) {
-        const clicked = await page.evaluate((isSingle) => {
-          const btns = Array.from(document.querySelectorAll('button'));
-          const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
-          if (!isSingle) {
-            const c = labeled.find(x => x.l.includes('decrement case') || x.l.includes('decrease case'));
-            if (c) { c.b.click(); return '-case'; }
-          }
-          const s = labeled.find(x => x.l.includes('decrement single') || x.l.includes('decrease single'));
-          if (s) { s.b.click(); return '-single'; }
-          const any = labeled.find(x => x.l.includes('decrement') || x.l.includes('decrease'));
-          if (any) { any.b.click(); return '-any'; }
-          const minus = btns.filter(b => b.textContent.trim() === '-');
-          if (!isSingle && minus.length >= 2) { minus[1].click(); return '-case'; }
-          if (minus.length >= 1) { minus[0].click(); return '-first'; }
-          return 'none';
-        }, isSingle);
-        console.log(`  [- ${i+1}/${absClicks}] ${clicked}`);
-        await page.waitForTimeout(800);
-      }
+    // FIX 4: Loop starts at 1 because cart is completely empty, meaning modal defaults to 1
+    for (let i = 1; i < item.quantity; i++) {
+      const clicked = await page.evaluate((isSingle) => {
+        const btns = Array.from(document.querySelectorAll('button'));
+        const labeled = btns.map(b => ({ b, l: (b.getAttribute('aria-label') || '').toLowerCase() }));
+        if (!isSingle) {
+          const c = labeled.find(x => x.l.includes('increment case') || x.l.includes('increase case'));
+          if (c) { c.b.click(); return 'case'; }
+        }
+        const s = labeled.find(x => x.l.includes('increment single') || x.l.includes('increase single'));
+        if (s) { s.b.click(); return 'single'; }
+        const any = labeled.find(x => x.l.includes('increment') || x.l.includes('increase'));
+        if (any) {
+          if (isSingle) { any.b.click(); return 'any-single'; }
+          any.b.click(); return 'any';
+        }
+        const plus = btns.filter(b => b.textContent.trim() === '+');
+        if (!isSingle && plus.length >= 2) { plus[1].click(); return '+case'; }
+        if (plus.length >= 1) { plus[0].click(); return '+first'; }
+        return 'none';
+      }, isSingle);
+      console.log(`  [+ ${i}/${item.quantity - 1}] ${clicked}`);
+      await page.waitForTimeout(800);
     }
   }
 
-  // Click confirm button
   await page.waitForTimeout(600);
   const confirmed = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button'));
     const cartBtns = btns.filter(b => /to cart|update/i.test(b.textContent));
-    console.log('CART_BTNS:' + cartBtns.map(b => b.textContent.trim()).join('|'));
     for (const b of cartBtns) {
       const m = b.textContent.match(/Add (\d+)/i);
       if (m && +m[1] > 0 && +m[1] < 50) { b.click(); return b.textContent.trim(); }
@@ -284,10 +256,8 @@ async function placeOrder(orderItems) {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
   const context = await browser.newContext({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' });
   const page = await context.newPage();
-  page.on('console', m => { if (m.text().startsWith('CART_BTNS:')) console.log('  BROWSER:', m.text()); });
 
   try {
-    // Login
     await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(5000);
     await page.waitForSelector('#email', { timeout: 30000 });
@@ -299,27 +269,19 @@ async function placeOrder(orderItems) {
     await page.waitForTimeout(5000);
     console.log('Logged in');
 
-    // Clear cart
     await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
-    for (let i = 0; i < 60; i++) {
-      const removed = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const removeBtn = btns.find(b => {
-          const txt = b.textContent.trim().toLowerCase();
-          const aria = (b.getAttribute('aria-label') || '').toLowerCase();
-          const html = b.innerHTML.toLowerCase();
-          return txt === 'remove' || txt === 'delete' || aria.includes('remove') || aria.includes('delete') || html.includes('trash');
-        });
-        if (removeBtn) { removeBtn.click(); return true; }
-        return false;
-      });
-      if (!removed) break;
-      await page.waitForTimeout(1200);
+    
+    // FIX 5: Bulletproof native Playwright locators for Cart Clearing.
+    // This finds ANY button containing the word "Remove" (e.g. "Replace with best match 🗑️ Remove")
+    let removeBtns = page.locator('button:has-text("Remove")');
+    while (await removeBtns.count() > 0) {
+      await removeBtns.first().click();
+      await page.waitForTimeout(1500);
+      removeBtns = page.locator('button:has-text("Remove")'); // Refresh locator count
     }
     console.log('Cart cleared');
 
-    // Load order guide
     await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568', { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(6000);
     console.log('Order guide loaded');
@@ -346,14 +308,14 @@ app.post('/whatsapp', async (req, res) => {
   const msg = req.body.Body;
   const from = req.body.From.replace('whatsapp:', '');
   const name = from === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
-  console.log(`From ${name}: ${msg}`);
 
   if (!AUTHORIZED_NUMBERS.includes(from)) { await sendWhatsApp(from, '❌ Not authorized'); return; }
   await sendWhatsApp(from, `✅ Got it ${name}! Processing...`);
 
   try {
     const order = await parseOrder(msg);
-    if (order.error) { await sendWhatsApp(from, '❓ Could not parse order'); return; }
+    // Updated error text so you get detailed AI feedback if it ever fails
+    if (order.error) { await sendWhatsApp(from, `❓ Could not parse order: ${order.details || 'Unknown API Error'}`); return; }
 
     const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
     await sendWhatsApp(from, `📋 Adding to cart:\n\n${summary}`);
