@@ -179,36 +179,52 @@ async function sendEmail(orderItems, sender) {
 async function readCartItems(page) {
   return await page.evaluate(function() {
     var results = [];
-
-    // Each cart item lives in its own product group
     var groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
 
     groups.forEach(function(group) {
-      // Quantity: parse the number from "1 ct", "12 ct", "1 pkg", etc.
+      // Qty from the cartStepper span: "1 ct", "12 ct", "1 pkg" → number
       var stepper = group.querySelector('[data-testid="cartStepper"]');
-      var qty = 1; // default
+      var qty = 1;
       if (stepper) {
         var m = stepper.textContent.match(/(\d+)/);
         if (m) qty = parseInt(m[1], 10);
       }
 
-      // Item name: scan all text nodes in the group, pick the one that looks
-      // like a product name — longer than 5 chars, not a price, not UI labels.
-      var skip = /^(\$[\d.]+|remove|replace|likely|many in stock|about|qty|per|lb|oz|fl|ct|pkg|gal|\d+(\.\d+)?(\s*(lb|oz|ct|gal|fl oz|z))?)$/i;
-      var candidates = Array.from(group.querySelectorAll('p, span, a, div, h1, h2, h3, h4, h5'))
-        .map(function(el) {
-          // Only consider leaf-ish nodes — skip containers with lots of nested children
-          if (el.children.length > 3) return '';
-          return (el.textContent || '').trim();
-        })
-        .filter(function(t) {
-          return t.length > 5 && t.length < 150 && !skip.test(t) && !/\$/.test(t);
-        });
+      // Walk every element in the group. Skip anything inside a <button>
+      // (that catches the screen-reader span "Quantity: 1 item. Change quantity").
+      // From the remaining elements, pick the longest text that looks like a name.
+      var name = '';
+      var els = Array.from(group.querySelectorAll('span, p, div, a, h1, h2, h3, h4, h5'));
+      els.forEach(function(el) {
+        // Check ancestors — skip if inside a button
+        var a = el.parentElement;
+        while (a && a !== group) {
+          if (a.tagName === 'BUTTON') return; // forEach return = continue
+          a = a.parentElement;
+        }
+        // Skip containers (too many children = layout wrapper, not a text node)
+        if (el.children.length > 2) return;
 
-      // Pick the longest candidate as the most likely product name
-      var name = candidates.reduce(function(a, b) { return a.length >= b.length ? a : b; }, '');
+        var t = (el.textContent || '').trim();
+        if (t.length < 6 || t.length > 130) return;
+        if (/quantity:/i.test(t))       return; // screen-reader text
+        if (/change quantity/i.test(t)) return; // screen-reader text
+        if (/^\$/.test(t))              return; // price
+        if (/^(remove|replace|likely|many in stock|about|per\s)/i.test(t)) return;
+        // Pure unit descriptors ("32#", "35 lb", "1 gal", "128 z", "40 lb")
+        if (/^\d+\.?\d*\s*(#|lbs?|oz|gal|ct|z|fl\s*oz|ml)\s*$/.test(t)) return;
 
-      if (name) results.push({ name: name, qty: qty });
+        if (t.length > name.length) name = t;
+      });
+
+      // Strip trailing unit that got concatenated onto the name
+      // e.g. "James Farm - Plain Yogurt - 32 lbs32#" → "James Farm - Plain Yogurt - 32 lbs"
+      // e.g. "Chef's Quality - Lemon Juice - gallon1 gal" → "...gallon"
+      name = name.replace(/\s*•\s*.+$/, '').trim();             // strip " • 24 x 16.9 fl oz"
+      name = name.replace(/\s*\d+\.?\d*\s*(#|lbs?)\s*$/, '').trim(); // strip "32#", "35 lb"
+      name = name.replace(/\s*\d+\.?\d*\s*(gal|fl\s*oz|ml|z|ct)\s*$/, '').trim(); // "1 gal", "128 z"
+
+      if (name.length > 3) results.push({ name: name, qty: qty });
     });
 
     return results;
