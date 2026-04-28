@@ -59,8 +59,9 @@ const ITEM_MAP = {
   'yogurt': 'James Farm - Plain Yogurt - 32 lbs',
   'cheese': 'James Farm - Shredded Cheddar Jack Cheese - 5 lbs',
   
-  // Chicken Mapping - defaults to Leg Meat
+  // Chicken Mapping - AI strictly resolves all thigh requests to Leg Meat
   'chicken breast': 'Boneless, Skinless Chicken Breasts, Tenders Out, Dry',
+  'chicken thigh': 'Fresh Boneless Skinless Chicken Leg Meat',
   'chicken thighs': 'Fresh Boneless Skinless Chicken Leg Meat',
   'chicken boneless thighs': 'Fresh Boneless Skinless Chicken Leg Meat',
   'chicken leg meat': 'Fresh Boneless Skinless Chicken Leg Meat',
@@ -106,7 +107,7 @@ const ITEM_MAP = {
   'diet coke': 'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
 };
 
-// Auto-swaps to fallback item if primary item is out of stock in the drawer
+// Seamless fallback if primary is out of stock in the drawer
 const FALLBACKS = {
   'Fresh Boneless Skinless Chicken Leg Meat': 'Boneless, Skinless Jumbo Chicken Thighs'
 };
@@ -306,18 +307,6 @@ async function placeOrder(orderItems) {
       } catch(e) {}
     }
 
-    const productIdToName={};
-    const itemsResp = capturedResponses['Items']||[];
-    for (const resp of itemsResp) {
-      try {
-        const items = resp?.data?.items||[];
-        items.forEach(item=>{
-          const pid = String(item.productId||'');
-          if(pid) productIdToName[pid]=item.name||'';
-        });
-      } catch(e) {}
-    }
-
     const productIdToCartItemId={};
     const replResp = capturedResponses['UniversalReplacements']||[];
     for (const resp of replResp) {
@@ -417,7 +406,6 @@ async function placeOrder(orderItems) {
         if (s > bestScore) { bestScore = s; best = e; }
       }
 
-      // NEW FEATURE: Seamlessly swap to fallback item if primary is missing in cart
       if ((!best || bestScore < 2) && FALLBACKS[orderedKey]) {
         const fallbackKey = FALLBACKS[orderedKey];
         let fBest = null, fScore = 0;
@@ -469,52 +457,35 @@ async function placeOrder(orderItems) {
             body: JSON.stringify(body)
           });
           const text = await r.text();
-          const data = JSON.parse(text);
-          return data;
+          return JSON.parse(text);
         } catch(e) {
           return { errors: [{ message: 'fetch error: ' + e.message }] };
         }
       }
 
       async function updateQty(itemIdPrefixed, targetQty, cartId, hash) {
-        if (!itemIdPrefixed || itemIdPrefixed === 'undefined' || itemIdPrefixed.includes('undefined')) {
-          return { ok: false, err: 'no itemIdPrefixed: ' + itemIdPrefixed };
-        }
+        if (!itemIdPrefixed || itemIdPrefixed.includes('undefined')) return { ok: false, err: 'invalid id' };
         const trackingParams = { trackingProperties: { source: 'cart' } };
         const mutations = [
-          ['UpdateCartItemsMutation', null, {
-            cartItemUpdates: [{ itemId: itemIdPrefixed, quantity: targetQty, quantityType: 'each', trackingParams }]
-          }, hash],
-          ['UpdateCartItemsMutation', null, {
-            cartItemUpdates: [{ itemId: itemIdPrefixed, quantity: targetQty, quantityType: 'each' }]
-          }, hash],
-          ['UpdateCartItemsMutation', null, {
-            cartItemUpdates: [{ itemId: itemIdPrefixed, quantity: targetQty }]
-          }, hash],
+          ['UpdateCartItemsMutation', null, { cartItemUpdates: [{ itemId: itemIdPrefixed, quantity: targetQty, quantityType: 'each', trackingParams }] }, hash],
+          ['UpdateCartItemsMutation', null, { cartItemUpdates: [{ itemId: itemIdPrefixed, quantity: targetQty, quantityType: 'each' }] }, hash],
+          ['UpdateCartItemsMutation', null, { cartItemUpdates: [{ itemId: itemIdPrefixed, quantity: targetQty }] }, hash],
         ];
         for (const [op, query, vars, h] of mutations) {
           const d = await gqlFetch(op, query, vars, h);
-          if (!d.errors) return { ok: true, op, shape: Object.keys(vars.cartItemUpdates[0]).join(',') };
+          if (!d.errors) return { ok: true };
         }
-        return { ok: false, err: 'all variants failed' };
-      }
-
-      async function removeItem(itemIdPrefixed, cartId, hash) {
-        return await updateQty(itemIdPrefixed, 0, cartId, hash);
+        return { ok: false, err: 'failed' };
       }
 
       for (const action of actions) {
         try {
           if (action.action === 'skip') {
             results.push({ action: 'skip', name: action.name, qty: action.targetQty });
-          } else if (action.action === 'update') {
+          } else if (action.action === 'update' || action.action === 'remove') {
             await new Promise(r => setTimeout(r, 250)); 
             const r = await updateQty(action.itemIdPrefixed, action.targetQty, cartId, updateMutationHash);
-            results.push({ action: 'update', name: action.name, from: action.currentQty, to: action.targetQty, id: action.itemIdPrefixed, ...r });
-          } else if (action.action === 'remove') {
-            await new Promise(r => setTimeout(r, 250));
-            const r = await removeItem(action.itemIdPrefixed, cartId, updateMutationHash);
-            results.push({ action: 'remove', name: action.name, id: action.cartItemId, ...r });
+            results.push({ action: action.action, name: action.name, ...r });
           }
         } catch(e) {
           results.push({ action: action.action, name: action.name, error: e.message });
@@ -522,6 +493,53 @@ async function placeOrder(orderItems) {
       }
       return JSON.stringify(results);
     }, { actions, cartId, updateMutationHash });
+
+    let parsedResults = [];
+    try { parsedResults = JSON.parse(results); } catch(e) { console.log('Results parse err:', e.message); }
+    console.log('=== RESULTS ===');
+    (parsedResults || []).forEach(r => {
+      console.log(`${r.ok?'OK':(r.action==='skip'?'SKIP':'FAIL')} | ${r.action} | ${(r.name||'').slice(0,50)}`);
+    });
+
+    // ── GHOST ITEM UI SWEEPER ────────────────────────────────────────
+    // If the API failed to accept `targetQty: 0`, we manually delete the ghost items from the Cart page
+    console.log('Starting UI Ghost Item Sweeper...');
+    await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(4000);
+
+    const ghostNames = actions.filter(a => a.action === 'remove').map(a => {
+        return a.name.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(w => w.length >= 4).join(' ');
+    }).filter(n => n.length > 5);
+
+    if (ghostNames.length > 0) {
+      let ghostsBusted = 0;
+      for (let i = 0; i < 40; i++) {
+        const clicked = await page.evaluate((names) => {
+          const groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
+          for (const g of groups) {
+            const txt = (g.textContent || '').toLowerCase().replace(/[^a-z0-9 ]/g,' ');
+            const isGhost = names.some(name => {
+               const words = name.split(' ');
+               return words.length > 1 && words.every(w => txt.includes(w));
+            });
+            if (isGhost) {
+               const btn = Array.from(g.querySelectorAll('button, a')).find(b => {
+                 const t = (b.textContent||'').trim().toLowerCase();
+                 const a = (b.getAttribute('aria-label')||'').toLowerCase();
+                 return (t==='remove'||a.includes('remove'))&&!a.includes('wishlist');
+               });
+               if (btn) { btn.click(); return true; }
+            }
+          }
+          return false;
+        }, ghostNames);
+        
+        if (!clicked) break;
+        await page.waitForTimeout(1500);
+        ghostsBusted++;
+      }
+      console.log(`UI Sweeper: Busted ${ghostsBusted} ghost items`);
+    }
 
     const notFound = Object.entries(targetMap).filter(([k,v])=>!v.found).map(([k])=>k);
     await browser.close();
@@ -538,7 +556,6 @@ app.post('/whatsapp', async(req,res)=>{
   res.sendStatus(200);
   const msg=req.body.Body, from=req.body.From.replace('whatsapp:','');
   const name=from===process.env.YOUR_WHATSAPP_NUMBER?'Nick':'Rahul';
-  console.log(`From ${name}: ${msg}`);
   if(!AUTHORIZED_NUMBERS.includes(from)){await sendWhatsApp(from,'Not authorized');return;}
   await sendWhatsApp(from,`Got it ${name}! Placing order...`);
   
@@ -554,18 +571,12 @@ app.post('/whatsapp', async(req,res)=>{
       if(result.notFound?.length) reply+='\n\n⚠️ Add manually:\n'+result.notFound.map(n=>`• ${n}`).join('\n');
       await sendWhatsApp(from, reply);
       
-      // FIX: Isolated SendGrid email to guarantee it doesn't crash the WhatsApp confirmation
-      try { 
-        await sendEmail(order, name); 
-      } catch(emailErr) { 
-        console.error('Email failed but order succeeded:', emailErr.message); 
-      }
+      try { await sendEmail(order, name); } catch(emailErr) { console.log('Email failed'); }
       
     } else {
       await sendWhatsApp(from,'❌ Error: '+result.error);
     }
   } catch(e) { 
-    console.error(e);
     await sendWhatsApp(from,'❌ General Error: ' + e.message); 
   }
 });
