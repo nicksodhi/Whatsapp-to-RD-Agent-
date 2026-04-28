@@ -37,6 +37,8 @@ const CASE_SIZES = {
   'Isabella - Petite Diced Tomatoes -#10 cans': 6,
   // Paneer always by case (4 ct = 20 lbs)
   'Royal Mahout - Paneer Loaf - 5 lbs': 4,
+  // Pan spray always by case (6 cans)
+  "Chef's Quality - All Purpose Pan Spray - 17 oz": 6,
 };
 
 const ITEM_MAP = {
@@ -103,6 +105,11 @@ const ITEM_MAP = {
   'water': 'Evian - Natural Spring Water, 24 Ct, 500 mL',
   'sprite': 'Sprite Bottles, 16.9 fl oz, 4 Pack',
   'diet coke': 'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
+  'pan spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
+  'spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
+  'cooking spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
+  'serrano peppers': 'Serrano Peppers',
+  'serrano': 'Serrano Peppers',
 };
 
 async function parseOrder(msg) {
