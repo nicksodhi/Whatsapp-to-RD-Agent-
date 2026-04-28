@@ -355,7 +355,11 @@ async function waitForModalClose(page) {
   await page.waitForTimeout(400);
 }
 
-// Adjust a cart item's quantity by opening its stepper modal.
+// Adjust a cart item's quantity.
+//
+// Clicking the cartStepper in the cart drawer opens a product detail PAGE
+// (not an inline dialog) with separate unit/case steppers and a Back button.
+// DevTools confirmed aria-label="Increment unit quantity" on the + button.
 async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
   var delta = targetQty - currentQty;
   if (delta === 0) {
@@ -363,48 +367,73 @@ async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
     return true;
   }
 
-  // Close any open modal first
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(300);
 
-  // Open the stepper for this item
   var stepResult = await clickStepperForItem(page, itemName);
   console.log('  [stepper] ' + itemName + ' → ' + stepResult);
   if (stepResult !== 'ok') return false;
 
-  // Wait for modal to appear
-  var modalOpen = false;
-  for (var w = 0; w < 15; w++) {
+  // Wait for product detail page (has unit/case quantity buttons)
+  var productPageOpen = false;
+  for (var w = 0; w < 20; w++) {
     await page.waitForTimeout(400);
-    modalOpen = await page.evaluate(function() {
-      var modal = document.querySelector('[role="dialog"]');
-      if (!modal) return false;
-      return Array.from(modal.querySelectorAll('button')).some(function(b) {
+    productPageOpen = await page.evaluate(function() {
+      return Array.from(document.querySelectorAll('button')).some(function(b) {
         var l = (b.getAttribute('aria-label') || '').toLowerCase();
-        return l.includes('increment') || l.includes('decrement') ||
-               l.includes('increase')  || l.includes('decrease') ||
-               b.textContent.trim() === '+' || b.textContent.trim() === '-';
+        return l.includes('increment unit') || l.includes('decrement unit') ||
+               l.includes('increment case') || l.includes('decrement case') ||
+               l.includes('increment single') || l.includes('decrement single');
       });
     });
-    if (modalOpen) break;
+    if (productPageOpen) break;
   }
-  if (!modalOpen) { console.log('  WARNING: modal never opened for ' + itemName); return false; }
 
-  // Click + or - the right number of times
+  if (!productPageOpen) {
+    console.log('  WARNING: product page never opened for ' + itemName);
+    await page.keyboard.press('Escape');
+    return false;
+  }
+
   var direction = delta > 0 ? 'increment' : 'decrement';
   var clicks = Math.abs(delta);
   console.log('  [' + direction + '] ' + itemName + ': ' + currentQty + ' → ' + targetQty + ' (' + clicks + ' clicks)');
 
   for (var i = 0; i < clicks; i++) {
-    var r = await clickModalStepper(page, direction);
-    console.log('    [' + (i + 1) + '/' + clicks + '] ' + r);
-    await page.waitForTimeout(600);
+    var result = await page.evaluate(function(dir) {
+      var btns = Array.from(document.querySelectorAll('button'));
+      var btn = btns.find(function(b) {
+        var l = (b.getAttribute('aria-label') || '').toLowerCase();
+        return l.includes(dir + ' unit') || l.includes(dir + ' single');
+      });
+      // Fallback: plain + or - symbol button
+      if (!btn) {
+        var sym = dir === 'increment' ? '+' : '-';
+        btn = btns.find(function(b) { return b.textContent.trim() === sym; });
+      }
+      if (btn) { btn.click(); return btn.getAttribute('aria-label') || btn.textContent.trim(); }
+      return 'no-btn';
+    }, direction);
+    console.log('    [' + (i + 1) + '/' + clicks + '] ' + result);
+    if (result === 'no-btn') { console.log('  WARNING: no ' + direction + ' button'); break; }
+    await page.waitForTimeout(500);
   }
 
-  // Confirm and close
+  // Click Back to return to the cart drawer
+  await page.waitForTimeout(400);
+  var backResult = await page.evaluate(function() {
+    var btns = Array.from(document.querySelectorAll('button, a'));
+    var back = btns.find(function(b) {
+      var txt = (b.textContent || '').trim().toLowerCase();
+      var lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+      return txt === 'back' || lbl === 'back' || lbl.includes('go back');
+    });
+    if (back) { back.click(); return 'ok'; }
+    return 'no-back';
+  });
+  console.log('  [back] ' + backResult);
+  if (backResult !== 'ok') await page.keyboard.press('Escape');
   await page.waitForTimeout(800);
-  await confirmModal(page);
-  await waitForModalClose(page);
   return true;
 }
 
