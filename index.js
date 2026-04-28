@@ -1,8 +1,8 @@
-const express = require('express');
-const twilio = require('twilio');
+const express  = require('express');
+const twilio   = require('twilio');
 const Anthropic = require('@anthropic-ai/sdk');
 const { chromium } = require('playwright');
-const sgMail = require('@sendgrid/mail');
+const sgMail   = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const app = express();
@@ -10,13 +10,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const AUTHORIZED_NUMBERS = [
   process.env.YOUR_WHATSAPP_NUMBER,
-  process.env.RAHUL_WHATSAPP_NUMBER
+  process.env.RAHUL_WHATSAPP_NUMBER,
 ];
 
+// Items always ordered as individual units (no case multiplier)
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
@@ -25,6 +26,7 @@ const SINGLE_ONLY_ITEMS = [
   'Carrots- 10 lb',
 ];
 
+// How many individual units are in one case (for pricing tier + qty math)
 const CASE_SIZES = {
   'Peeled Garlic':                                              6,
   'White Cauliflower':                                         12,
@@ -99,15 +101,13 @@ const ITEM_MAP = {
   'diet coke':            'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
 };
 
-// ── ORDER PARSER ──────────────────────────────────────────────────────────────
+// ── PARSE ORDER ───────────────────────────────────────────────────────────────
 
 async function parseOrder(message) {
-  var itemMapStr = Object.entries(ITEM_MAP).map(function(pair) {
-    return '"' + pair[0] + '" -> "' + pair[1] + '"';
-  }).join('\n');
-
+  const itemMapStr = Object.entries(ITEM_MAP)
+    .map(([k, v]) => `"${k}" -> "${v}"`).join('\n');
   try {
-    var response = await anthropic.messages.create({
+    const res = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1000,
       messages: [{
@@ -116,19 +116,19 @@ async function parseOrder(message) {
           'You are an ordering assistant for Naan & Curry restaurant.\n\n' +
           'Item mapping:\n' + itemMapStr + '\n\n' +
           'Rules:\n' +
-          '- IGNORE headers, dates, and names (e.g. "RESTAURANT DEPOT", "Mohan", "Sat Apr 25")\n' +
+          '- IGNORE headers, dates, names (e.g. "RESTAURANT DEPOT", "Mohan")\n' +
           '- ONLY add items explicitly listed with a quantity number\n' +
-          '- Use the EXACT quantity from the order. Never change it or do math.\n' +
+          '- Use the EXACT quantity. Never change it.\n' +
           '- Return ONLY a valid JSON array\n\n' +
-          'Format: [{"item": "exact name from map values", "quantity": NUMBER}]\n\n' +
-          'Order: ' + message
-      }]
+          'Format: [{"item":"exact name from map values","quantity":NUMBER}]\n\n' +
+          'Order: ' + message,
+      }],
     });
-    var text = response.content[0].text;
-    var match = text.match(/\[[\s\S]*\]/);
+    const text  = res.content[0].text;
+    const match = text.match(/\[[\s\S]*\]/);
     return JSON.parse(match ? match[0] : text);
-  } catch (err) {
-    console.error('Parse error:', err.message);
+  } catch (e) {
+    console.error('parseOrder error:', e.message);
     return { error: true };
   }
 }
@@ -136,540 +136,291 @@ async function parseOrder(message) {
 // ── MESSAGING ─────────────────────────────────────────────────────────────────
 
 async function sendWhatsApp(to, body) {
-  var chunks = body.match(/[\s\S]{1,1400}/g) || [body];
-  for (var i = 0; i < chunks.length; i++) {
+  const chunks = body.match(/[\s\S]{1,1400}/g) || [body];
+  for (let i = 0; i < chunks.length; i++) {
     await twilioClient.messages.create({
       from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER,
-      to: 'whatsapp:' + to,
-      body: chunks[i]
+      to:   'whatsapp:' + to,
+      body: chunks[i],
     });
-    if (chunks.length > 1) await new Promise(function(r) { setTimeout(r, 1000); });
+    if (chunks.length > 1) await new Promise(r => setTimeout(r, 1000));
   }
 }
 
 async function sendEmail(orderItems, sender) {
-  var lines = orderItems.map(function(i) { return '* ' + i.quantity + 'x ' + i.item; }).join('\n');
+  const lines = orderItems.map(i => `* ${i.quantity}x ${i.item}`).join('\n');
   await sgMail.send({
-    from: 'nicksodhi@gmail.com',
-    to: 'nicksodhi@gmail.com',
+    from:    'nicksodhi@gmail.com',
+    to:      'nicksodhi@gmail.com',
     subject: 'Restaurant Depot Cart Updated - ' + new Date().toLocaleDateString(),
-    text: 'Order by ' + sender + ':\n\n' + lines + '\n\nCheckout: https://member.restaurantdepot.com/store/business/cart'
+    text:    `Order by ${sender}:\n\n${lines}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`,
   });
 }
 
-// ── CART HELPERS ──────────────────────────────────────────────────────────────
-//
-// Confirmed DOM structure from DevTools screenshots:
-//
-//   <div aria-label="product" role="group">          ← one per cart item
-//     ...item name text, price, etc...
-//     <button>                                        ← clicking opens stepper modal
-//       <span data-testid="cartStepper">1 ct</span>  ← current qty display
-//       <span class="screen-reader-only">Quantity: 1 item. Change quantity</span>
-//     </button>
-//     <button>Remove</button>                         ← remove button within group
-//   </div>
-//
-// After clicking the cartStepper button, the same stepper modal opens as on
-// the order guide. The confirm button says "Update cart" (not "Update guide"),
-// so we can actually update the quantity successfully.
+// ── HELPERS ───────────────────────────────────────────────────────────────────
 
-// Read all cart items from the drawer.
-// Returns array of { name, qty }.
-async function readCartItems(page) {
-  return await page.evaluate(function() {
-    var results = [];
-    var groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
-
-    groups.forEach(function(group) {
-      // Qty from the cartStepper span: "1 ct", "12 ct", "1 pkg" → number
-      var stepper = group.querySelector('[data-testid="cartStepper"]');
-      var qty = 1;
-      if (stepper) {
-        var m = stepper.textContent.match(/(\d+)/);
-        if (m) qty = parseInt(m[1], 10);
-      }
-
-      // Walk every element in the group. Skip anything inside a <button>
-      // (that catches the screen-reader span "Quantity: 1 item. Change quantity").
-      // From the remaining elements, pick the longest text that looks like a name.
-      var name = '';
-      var els = Array.from(group.querySelectorAll('span, p, div, a, h1, h2, h3, h4, h5'));
-      els.forEach(function(el) {
-        // Check ancestors — skip if inside a button
-        var a = el.parentElement;
-        while (a && a !== group) {
-          if (a.tagName === 'BUTTON') return; // forEach return = continue
-          a = a.parentElement;
-        }
-        // Skip containers (too many children = layout wrapper, not a text node)
-        if (el.children.length > 2) return;
-
-        var t = (el.textContent || '').trim();
-        if (t.length < 6 || t.length > 130) return;
-        if (/quantity:/i.test(t))       return; // screen-reader text
-        if (/change quantity/i.test(t)) return; // screen-reader text
-        if (/^\$/.test(t))              return; // price
-        if (/^(remove|replace|likely|many in stock|about|per\s)/i.test(t)) return;
-        // Pure unit descriptors ("32#", "35 lb", "1 gal", "128 z", "40 lb")
-        if (/^\d+\.?\d*\s*(#|lbs?|oz|gal|ct|z|fl\s*oz|ml)\s*$/.test(t)) return;
-
-        if (t.length > name.length) name = t;
-      });
-
-      // Strip trailing unit that got concatenated onto the name
-      // e.g. "James Farm - Plain Yogurt - 32 lbs32#" → "James Farm - Plain Yogurt - 32 lbs"
-      // e.g. "Chef's Quality - Lemon Juice - gallon1 gal" → "...gallon"
-      name = name.replace(/\s*•\s*.+$/, '').trim();             // strip " • 24 x 16.9 fl oz"
-      name = name.replace(/\s*\d+\.?\d*\s*(#|lbs?)\s*$/, '').trim(); // strip "32#", "35 lb"
-      name = name.replace(/\s*\d+\.?\d*\s*(gal|fl\s*oz|ml|z|ct)\s*$/, '').trim(); // "1 gal", "128 z"
-
-      if (name.length > 3) results.push({ name: name, qty: qty });
-    });
-
-    return results;
-  });
-}
-
-// Score how well a cart item name matches an ordered item name.
-function scoreMatch(cartName, orderedName) {
-  var t = cartName.toLowerCase();
-  var words = orderedName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
-    return w.length >= 3 && ['lbs', 'pkg', 'and', 'the', 'for', 'all', 'out', 'can', 'dry'].indexOf(w) === -1;
-  });
-  var priority = words.filter(function(w) { return w.length >= 6; });
-  var score = 0;
-  words.forEach(function(w) { if (t.includes(w)) score++; });
-  priority.forEach(function(w) { if (t.includes(w)) score += 3; });
+// Score how well a string matches an item name (higher = better)
+function scoreMatch(text, itemName) {
+  const t = text.toLowerCase();
+  const words = itemName.toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ').split(' ')
+    .filter(w => w.length >= 3 && !['lbs','pkg','and','the','for','all','out','can','dry'].includes(w));
+  const priority = words.filter(w => w.length >= 6);
+  let score = words.filter(w => t.includes(w)).length;
+  priority.forEach(w => { if (t.includes(w)) score += 3; });
   return score;
 }
 
-// Find the product group in the cart that best matches itemName.
-// Returns the group element (in-browser), or null.
-// This runs inside page.evaluate so it returns a serialisable result —
-// we use it by passing itemName and getting back a boolean + clicking inline.
-async function clickStepperForItem(page, itemName) {
-  return await page.evaluate(function(itemName) {
-    var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
-      return w.length >= 3;
-    });
-    var groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
-    var best = null, bestScore = 0;
-    groups.forEach(function(g) {
-      var text = g.textContent.toLowerCase();
-      var score = words.filter(function(w) { return text.includes(w); }).length;
-      if (score > bestScore) { bestScore = score; best = g; }
-    });
-    if (!best || bestScore === 0) return 'no-match:score0';
-
-    // The cartStepper is a <span> INSIDE a <button>. We must click the <button>,
-    // not the span — clicking inner elements can miss React's event handlers.
-    var stepperSpan = best.querySelector('[data-testid="cartStepper"]');
-    var stepperBtn = stepperSpan
-      ? (stepperSpan.closest('button') || stepperSpan.parentElement)
-      : best.querySelector('button');
-    if (!stepperBtn) return 'no-stepper';
-    stepperBtn.click();
-    return 'ok:' + stepperBtn.tagName;
-  }, itemName);
-}
-
-// Click the Remove button scoped to the product group for this item.
-async function clickRemoveForItem(page, itemName) {
-  return await page.evaluate(function(itemName) {
-    var words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function(w) {
-      return w.length >= 3;
-    });
-    var groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
-    var best = null, bestScore = 0;
-    groups.forEach(function(g) {
-      var text = g.textContent.toLowerCase();
-      var score = words.filter(function(w) { return text.includes(w); }).length;
-      if (score > bestScore) { bestScore = score; best = g; }
-    });
-    if (!best || bestScore === 0) return 'no-match';
-    var btns = Array.from(best.querySelectorAll('button, a'));
-    var removeBtn = btns.find(function(b) {
-      var label = (b.getAttribute('aria-label') || '').toLowerCase();
-      var text  = (b.textContent || '').trim().toLowerCase();
-      return label === 'remove' || text === 'remove';
-    });
-    if (!removeBtn) return 'no-remove-btn';
-    removeBtn.click();
-    return 'ok';
-  }, itemName);
-}
-
-// Increment or decrement inside the open stepper modal.
-// Scoped to [role="dialog"] so we never click the wrong item's buttons.
-async function clickModalStepper(page, direction) {
-  return await page.evaluate(function(direction) {
-    var modal = document.querySelector('[role="dialog"]') || document;
-    var btns  = Array.from(modal.querySelectorAll('button'));
-    var keyword   = direction === 'increment' ? ['increment', 'increase'] : ['decrement', 'decrease'];
-    var plusMinus = direction === 'increment' ? '+' : '-';
-
-    var btn = btns.find(function(b) {
-      var l = (b.getAttribute('aria-label') || '').toLowerCase();
-      var t = b.textContent.trim();
-      return keyword.some(function(k) { return l.includes(k); }) || t === plusMinus;
-    });
-    if (btn) { btn.click(); return btn.getAttribute('aria-label') || btn.textContent.trim(); }
-    return 'none';
-  }, direction);
-}
-
-// Confirm the stepper modal after setting quantity.
-// From the cart, the button says "Update cart" (not "Update guide").
-async function confirmModal(page) {
-  for (var attempt = 0; attempt < 5; attempt++) {
-    if (attempt > 0) await page.waitForTimeout(1000);
-    var confirmed = await page.evaluate(function() {
-      var btns = Array.from(document.querySelectorAll('button')).reverse();
-      var labels = btns.map(function(b) { return b.textContent.trim(); }).join(' | ');
-      console.log('MODAL_BTNS:' + labels);
-
-      // Priority 1: "Update cart" — the expected button when modifying from cart
-      var upd = btns.find(function(b) { return /update\s+cart/i.test(b.textContent); });
-      if (upd) { upd.click(); return 'Update cart'; }
-
-      // Priority 2: "Add N items to cart" (N > 0, not the bulk 54-item button)
-      for (var i = 0; i < btns.length; i++) {
-        var m = btns[i].textContent.match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
-        if (m && +m[1] > 0 && +m[1] < 50) { btns[i].click(); return btns[i].textContent.trim(); }
-      }
-
-      // Priority 3: plain "Add to cart"
-      var plain = btns.find(function(b) { return /^add to cart$/i.test(b.textContent.trim()); });
-      if (plain) { plain.click(); return 'Add to cart'; }
-
-      return null;
-    });
-
-    if (confirmed) {
-      console.log('  Confirmed: ' + confirmed);
-      return confirmed;
-    }
-  }
-  console.log('  WARNING: no confirm button found');
-  return null;
-}
-
-// Wait for the stepper modal to fully disappear.
-async function waitForModalClose(page) {
-  for (var i = 0; i < 25; i++) {
-    await page.waitForTimeout(300);
-    var open = await page.evaluate(function() {
-      var modal = document.querySelector('[role="dialog"]');
-      if (!modal) return false;
-      // Modal is "open" only if it contains stepper buttons
-      return Array.from(modal.querySelectorAll('button')).some(function(b) {
-        var l = (b.getAttribute('aria-label') || '').toLowerCase();
-        return l.includes('increment') || l.includes('decrement') || l.includes('increase') || l.includes('decrease');
-      });
-    });
-    if (!open) break;
-  }
-  await page.waitForTimeout(400);
-}
-
-// Adjust a cart item's quantity.
-//
-// Clicking the cartStepper in the cart drawer opens a product detail PAGE
-// (not an inline dialog) with separate unit/case steppers and a Back button.
-// DevTools confirmed aria-label="Increment unit quantity" on the + button.
-async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
-  var delta = targetQty - currentQty;
-  if (delta === 0) {
-    console.log('  [=] ' + itemName + ' already at ' + targetQty);
-    return true;
-  }
-
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(400);
-
-  var stepResult = await clickStepperForItem(page, itemName);
-  console.log('  [stepper] ' + itemName + ' → ' + stepResult);
-  if (!stepResult.startsWith('ok')) return false;
-
-  // Wait for the product detail page which has unit/case stepper buttons.
-  // Poll up to 12 seconds.
-  var productPageOpen = false;
-  var foundBtns = '';
-  for (var w = 0; w < 30; w++) {
-    await page.waitForTimeout(400);
-    var pageState = await page.evaluate(function() {
-      var btns = Array.from(document.querySelectorAll('button'));
-      var labels = btns.map(function(b) { return b.getAttribute('aria-label') || ''; })
-                       .filter(function(l) { return l.length > 0; });
-      var hasIncrement = labels.some(function(l) {
-        var ll = l.toLowerCase();
-        return ll.includes('increment unit') || ll.includes('decrement unit') ||
-               ll.includes('increment case') || ll.includes('decrement case') ||
-               ll.includes('increment single') || ll.includes('decrement single');
-      });
-      // Also check for Back button — confirms product page is open
-      var hasBack = Array.from(document.querySelectorAll('button, a')).some(function(b) {
-        return (b.textContent || '').trim().toLowerCase() === 'back';
-      });
-      return { hasIncrement: hasIncrement, hasBack: hasBack, labels: labels.slice(0, 8).join(' | ') };
-    });
-    if (pageState.hasIncrement || pageState.hasBack) {
-      productPageOpen = true;
-      foundBtns = pageState.labels;
-      break;
-    }
-  }
-
-  console.log('  [product page] open=' + productPageOpen + ' btns: ' + foundBtns);
-  if (!productPageOpen) {
-    console.log('  WARNING: product page never opened for ' + itemName);
-    await page.keyboard.press('Escape');
-    return false;
-  }
-
-  var direction = delta > 0 ? 'increment' : 'decrement';
-  var clicks = Math.abs(delta);
-  console.log('  [' + direction + '] ' + itemName + ': ' + currentQty + ' → ' + targetQty + ' (' + clicks + ' clicks)');
-
-  for (var i = 0; i < clicks; i++) {
-    var result = await page.evaluate(function(dir) {
-      var btns = Array.from(document.querySelectorAll('button'));
-      // Primary: aria-label contains direction + "unit" or "single"
-      var btn = btns.find(function(b) {
-        var l = (b.getAttribute('aria-label') || '').toLowerCase();
-        return l.includes(dir + ' unit') || l.includes(dir + ' single');
-      });
-      // Fallback: plain +/- text
-      if (!btn) {
-        var sym = dir === 'increment' ? '+' : '-';
-        btn = btns.find(function(b) { return b.textContent.trim() === sym; });
-      }
-      if (btn) { btn.click(); return (btn.getAttribute('aria-label') || btn.textContent.trim()); }
-      // Last resort: log all available button labels so we can debug
-      var allLabels = btns.map(function(b) {
-        return (b.getAttribute('aria-label') || b.textContent.trim().slice(0, 20));
-      }).filter(Boolean).join(' | ');
-      return 'no-btn. Available: ' + allLabels.slice(0, 200);
-    }, direction);
-    console.log('    [' + (i + 1) + '/' + clicks + '] ' + result);
-    if (result.startsWith('no-btn')) { console.log('  WARNING: increment btn not found'); break; }
-    await page.waitForTimeout(600);
-  }
-
-  // Click Back to return to the cart drawer
-  await page.waitForTimeout(500);
-  var backResult = await page.evaluate(function() {
-    var btns = Array.from(document.querySelectorAll('button, a'));
-    var back = btns.find(function(b) {
-      var txt = (b.textContent || '').trim().toLowerCase();
-      var lbl = (b.getAttribute('aria-label') || '').toLowerCase();
-      return txt === 'back' || lbl === 'back' || lbl.includes('go back');
-    });
-    if (back) { back.click(); return 'ok:' + (back.textContent || '').trim(); }
-    // Log what buttons exist so we can find the back button
-    var available = Array.from(document.querySelectorAll('button, a'))
-      .map(function(b) { return (b.textContent || '').trim().slice(0, 20); })
-      .filter(Boolean).slice(0, 10).join(' | ');
-    return 'no-back. Available: ' + available;
-  });
-  console.log('  [back] ' + backResult);
-  if (!backResult.startsWith('ok')) await page.keyboard.press('Escape');
-  await page.waitForTimeout(1000);
-  return true;
-}
-
-// Remove a cart item that isn't in today's order.
-async function removeCartItem(page, cartName) {
-  console.log('  [x] Remove: ' + cartName);
-  var result = await clickRemoveForItem(page, cartName);
-  console.log('    ' + result);
-  if (result !== 'ok') {
-    console.log('  WARNING: could not find Remove for "' + cartName + '" — skipping');
-    return false;
-  }
-  await page.waitForTimeout(1500);
-  return true;
-}
-
-// ── MAIN FLOW ─────────────────────────────────────────────────────────────────
+// ── MAIN AUTOMATION ───────────────────────────────────────────────────────────
 
 async function placeOrder(orderItems) {
-  // Build target qty map: ordered cases → cart units
-  var targetMap = {};
-  orderItems.forEach(function(oi) {
-    var isSingle  = SINGLE_ONLY_ITEMS.indexOf(oi.item) !== -1;
-    var caseSize  = CASE_SIZES[oi.item] || 1;
-    var targetQty = isSingle ? oi.quantity : oi.quantity * caseSize;
-    targetMap[oi.item] = { ordered: oi, targetQty: targetQty, found: false };
-    console.log('Target | ' + oi.item + ': ordered=' + oi.quantity + ' caseSize=' + caseSize + ' cartQty=' + targetQty);
+
+  // Pre-compute target cart quantities
+  const targetMap = {};
+  orderItems.forEach(oi => {
+    const isSingle  = SINGLE_ONLY_ITEMS.includes(oi.item);
+    const caseSize  = CASE_SIZES[oi.item] || 1;
+    const targetQty = isSingle ? oi.quantity : oi.quantity * caseSize;
+    targetMap[oi.item] = { ordered: oi, targetQty, found: false };
+    console.log(`Target | ${oi.item}: ordered=${oi.quantity} case=${caseSize} cartQty=${targetQty}`);
   });
 
-  var browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-  var context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
-  var page = await context.newPage();
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  });
+  const page = await context.newPage();
 
   try {
-    // ── LOGIN ──────────────────────────────────────────────────────────────────
+    // ── LOGIN ────────────────────────────────────────────────────────────────
     await page.goto(
       'https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F',
       { waitUntil: 'domcontentloaded', timeout: 30000 }
     );
     await page.waitForTimeout(5000);
-    await page.waitForSelector('#email', { timeout: 30000 });
-    await page.fill('#email', process.env.RD_EMAIL);
-    await page.waitForTimeout(400);
-    await page.fill('input[type="password"]', process.env.RD_PASSWORD);
-    await page.waitForTimeout(400);
-    await page.click('button[type="submit"]');
+    await page.locator('#email').fill(process.env.RD_EMAIL);
+    await page.locator('input[type="password"]').fill(process.env.RD_PASSWORD);
+    await page.locator('button[type="submit"]').click();
     await page.waitForTimeout(5000);
     console.log('Logged in');
 
-    // ── CLEAR CART ─────────────────────────────────────────────────────────────
-    await page.goto('https://member.restaurantdepot.com/store/business/cart', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // ── CLEAR CART ───────────────────────────────────────────────────────────
+    await page.goto('https://member.restaurantdepot.com/store/business/cart',
+      { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForTimeout(3000);
-    for (var i = 0; i < 80; i++) {
-      var removed = await page.evaluate(function() {
-        var els = Array.from(document.querySelectorAll('button, [role="button"], a'));
-        var btn = els.find(function(b) {
-          var txt  = (b.textContent || '').trim().toLowerCase();
-          var aria = (b.getAttribute('aria-label') || '').toLowerCase();
-          if (aria.includes('wishlist') || aria.includes('saved')) return false;
-          return txt === 'remove' || aria.includes('remove') || (b.innerHTML || '').toLowerCase().includes('trash');
-        });
-        if (btn) { btn.click(); return true; }
-        return false;
-      });
-      if (!removed) break;
+    for (let i = 0; i < 80; i++) {
+      const removeBtn = page.locator('button, a').filter({ hasText: /^remove$/i }).first();
+      if (await removeBtn.count() === 0) break;
+      await removeBtn.click();
       await page.waitForTimeout(1500);
     }
     console.log('Cart cleared');
 
-    // ── LOAD ORDER GUIDE ───────────────────────────────────────────────────────
-    // Use 'load' so React fully hydrates before we look for buttons.
+    // ── LOAD ORDER GUIDE ─────────────────────────────────────────────────────
     await page.goto(
       'https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',
       { waitUntil: 'load', timeout: 45000 }
     );
-    await page.waitForTimeout(3000);
 
-    // ── BULK ADD ALL GUIDE ITEMS ───────────────────────────────────────────────
-    // Use data-testid="add-all-items-button" — more reliable than text matching.
-    // Poll for the button — it may appear a few seconds after page load.
-    var bulkLabel = null;
-    for (var bulkAttempt = 0; bulkAttempt < 20; bulkAttempt++) {
-      bulkLabel = await page.evaluate(function() {
-        var btn = document.querySelector('[data-testid="add-all-items-button"]');
-        if (!btn) {
-          var btns = Array.from(document.querySelectorAll('button'));
-          btn = btns.find(function(b) {
-            var m = (b.textContent || '').trim().match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
-            return m && parseInt(m[1], 10) >= 10;
-          });
-        }
-        if (btn) { btn.click(); return (btn.textContent || '').trim(); }
-        return null;
-      });
-      if (bulkLabel) break;
-      console.log('Waiting for bulk add button... attempt ' + (bulkAttempt + 1));
+    // Poll for the bulk add button
+    let bulkBtn = null;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      bulkBtn = page.locator('[data-testid="add-all-items-button"]');
+      if (await bulkBtn.count() > 0) break;
+      // Fallback: button with text "Add N items to cart"
+      bulkBtn = page.locator('button').filter({ hasText: /add \d+ items to cart/i });
+      if (await bulkBtn.count() > 0) break;
+      console.log(`Waiting for bulk add button... attempt ${attempt + 1}`);
       await page.waitForTimeout(1500);
     }
+    if (await bulkBtn.count() === 0) throw new Error('Bulk add button not found after 30s');
 
-    if (!bulkLabel) throw new Error('Could not find bulk "Add all to cart" button after 30s');
-    console.log('Bulk add clicked: ' + bulkLabel);
+    await bulkBtn.first().click();
+    console.log('Bulk add clicked');
 
-    // The site shows a confirmation modal: "Add 54 items to cart?
-    // We'll add 1 of each item... Yes, continue / Nevermind"
-    // We must click "Yes, continue" or nothing gets added.
-    // data-testid="PromptModalConfirmButton" is the reliable hook.
-    var confirmed = false;
-    for (var attempt = 0; attempt < 15; attempt++) {
-      await page.waitForTimeout(1000);
-      confirmed = await page.evaluate(function() {
-        var btn = document.querySelector('[data-testid="PromptModalConfirmButton"]');
-        if (btn) { btn.click(); return true; }
-        return false;
-      });
-      if (confirmed) break;
-    }
-    if (!confirmed) throw new Error('Bulk add confirmation modal never appeared');
-    console.log('Bulk add confirmed ("Yes, continue" clicked)');
-
-    // The cart is a drawer overlay — do NOT navigate away from the order guide.
-    // Instead, click the cart icon in the header to open the drawer on this page.
-    // Give the bulk add a moment to register before we open it.
+    // ── CONFIRM THE "ADD 54 ITEMS?" MODAL ───────────────────────────────────
+    const confirmBtn = page.locator('[data-testid="PromptModalConfirmButton"]');
+    await confirmBtn.waitFor({ timeout: 15000 });
+    await confirmBtn.click();
+    console.log('Bulk add confirmed');
     await page.waitForTimeout(4000);
 
-    // ── OPEN CART DRAWER ───────────────────────────────────────────────────────
-    var drawerOpened = false;
-    for (var drawerAttempt = 0; drawerAttempt < 15; drawerAttempt++) {
-      drawerOpened = await page.evaluate(function() {
-        var btns = Array.from(document.querySelectorAll('button'));
-        // Cart icon button: aria-label="View Cart. Items in cart: 53"
-        var cartBtn = btns.find(function(b) {
-          var l = (b.getAttribute('aria-label') || '').toLowerCase();
-          return l.includes('view cart') || l.includes('cart. items') || l.includes('items in cart');
-        });
-        if (cartBtn) { cartBtn.click(); return true; }
-        return false;
-      });
-      if (drawerOpened) break;
-      console.log('Waiting for cart icon... attempt ' + (drawerAttempt + 1));
+    // ── OPEN CART DRAWER ─────────────────────────────────────────────────────
+    // Click the cart icon button in the header
+    const cartIconBtn = page.locator('button').filter({ hasText: /view cart|items in cart/i })
+      .or(page.locator('button[aria-label*="cart" i]').first());
+    
+    let drawerOpened = false;
+    for (let attempt = 0; attempt < 15; attempt++) {
+      const btn = page.locator('button[aria-label*="View Cart"]');
+      if (await btn.count() > 0) {
+        await btn.first().click();
+        drawerOpened = true;
+        break;
+      }
+      // Fallback: any button whose aria-label contains "items in cart"
+      const btn2 = page.locator('button[aria-label*="items in cart"]');
+      if (await btn2.count() > 0) {
+        await btn2.first().click();
+        drawerOpened = true;
+        break;
+      }
+      console.log(`Waiting for cart icon... attempt ${attempt + 1}`);
       await page.waitForTimeout(1000);
     }
-    if (!drawerOpened) throw new Error('Could not find cart icon button to open drawer');
+    if (!drawerOpened) throw new Error('Could not open cart drawer');
     console.log('Cart drawer opened');
 
-    // Wait for cartStepper elements — these only exist inside the cart drawer,
-    // NOT on the order guide page. Using [aria-label="product"][role="group"]
-    // was matching order guide cards before the drawer loaded, giving 0 items.
-    await page.waitForSelector('[data-testid="cartStepper"]', { timeout: 20000 });
-    await page.waitForTimeout(2000); // let all items render fully
+    // Wait for cart stepper elements — unique to the drawer, not the order guide
+    await page.locator('[data-testid="cartStepper"]').first().waitFor({ timeout: 20000 });
+    await page.waitForTimeout(2000);
 
-    // Read cart items — retry if needed
-    var cartItems = [];
-    for (var retry = 0; retry < 5; retry++) {
-      cartItems = await readCartItems(page);
-      if (cartItems.length > 0) break;
-      console.log('Cart read attempt ' + (retry + 1) + ' returned 0 items — retrying...');
-      await page.waitForTimeout(2000);
-    }
+    // ── READ CART ITEMS ──────────────────────────────────────────────────────
+    // Each cart item is in a [aria-label="product"][role="group"] container.
+    // We get all groups, extract name and qty from each.
+    const cartGroups = await page.locator('[aria-label="product"][role="group"]').all();
+    console.log(`Cart loaded: ${cartGroups.length} items`);
 
-    console.log('Cart loaded: ' + cartItems.length + ' items');
-    cartItems.forEach(function(ci) {
-      console.log('  cart | "' + ci.name + '" qty=' + ci.qty);
-    });
+    const cartItems = [];
+    for (const group of cartGroups) {
+      // Qty from cartStepper: "1 ct" → 1
+      const stepper = group.locator('[data-testid="cartStepper"]');
+      let qty = 1;
+      if (await stepper.count() > 0) {
+        const stepperText = await stepper.first().textContent();
+        const m = (stepperText || '').match(/(\d+)/);
+        if (m) qty = parseInt(m[1], 10);
+      }
 
-    // ── MATCH, ADJUST, AND REMOVE ──────────────────────────────────────────────
-    for (var c = 0; c < cartItems.length; c++) {
-      var cartItem = cartItems[c];
+      // Name: get full group text, remove known non-name parts, pick longest clean line
+      const fullText = await group.textContent();
+      const lines = (fullText || '').split(/\n+/).map(l => l.trim()).filter(l => l.length > 5);
+      const skipLine = /^(\$[\d.]+|remove|replace|likely|many in stock|about|per\s|replacement|qty|\d+\.?\d*\s*(#|lbs?|oz|gal|ct|z|fl\s*oz|ml)|quantity:|\d+\s*x\s*\d)/i;
+      const nameCandidates = lines.filter(l =>
+        l.length < 130 &&
+        !skipLine.test(l) &&
+        !/change quantity/i.test(l) &&
+        !/\$/.test(l)
+      );
+      const name = nameCandidates.reduce((a, b) => a.length >= b.length ? a : b, '');
 
-      // Find best match in the ordered items
-      var bestKey = null, bestScore = 0;
-      Object.keys(targetMap).forEach(function(key) {
-        var s = scoreMatch(cartItem.name, key);
-        if (s > bestScore) { bestScore = s; bestKey = key; }
-      });
-
-      if (!bestKey || bestScore === 0) {
-        await removeCartItem(page, cartItem.name);
-      } else {
-        var entry = targetMap[bestKey];
-        entry.found = true;
-        await adjustCartItemQty(page, bestKey, cartItem.qty, entry.targetQty);
+      if (name.length > 3) {
+        cartItems.push({ name, qty, group });
+        console.log(`  cart | "${name}" qty=${qty}`);
       }
     }
 
-    // ── REPORT MISSING ─────────────────────────────────────────────────────────
-    var notFound = Object.keys(targetMap).filter(function(key) {
-      return !targetMap[key].found;
-    });
-    console.log('Done. Not in guide: ' + (notFound.length ? notFound.join(', ') : 'none'));
+    // ── PROCESS EACH CART ITEM ───────────────────────────────────────────────
+    const notFound = [];
 
+    for (const cartItem of cartItems) {
+      // Match to ordered items
+      let bestKey = null, bestScore = 0;
+      for (const key of Object.keys(targetMap)) {
+        const s = scoreMatch(cartItem.name, key);
+        if (s > bestScore) { bestScore = s; bestKey = key; }
+      }
+
+      if (!bestKey || bestScore === 0) {
+        // Not in order — remove it
+        console.log(`  [x] Remove: ${cartItem.name}`);
+        try {
+          const removeBtn = cartItem.group.locator('button, a').filter({ hasText: /^remove$/i });
+          if (await removeBtn.count() > 0) {
+            await removeBtn.first().click();
+            await page.waitForTimeout(1500);
+            console.log(`    removed`);
+          } else {
+            console.log(`    WARNING: no remove button found`);
+          }
+        } catch (e) {
+          console.log(`    remove error: ${e.message}`);
+        }
+        continue;
+      }
+
+      const entry = targetMap[bestKey];
+      entry.found = true;
+      const delta = entry.targetQty - cartItem.qty;
+
+      if (delta === 0) {
+        console.log(`  [=] ${bestKey} already at ${entry.targetQty}`);
+        continue;
+      }
+
+      // Need to adjust qty — click the stepper button to open the product page
+      console.log(`  [adjust] ${bestKey}: ${cartItem.qty} → ${entry.targetQty} (delta=${delta})`);
+      try {
+        // Click the <button> that CONTAINS the cartStepper span
+        // Using Playwright's :has() selector — this is the key fix
+        const stepperButton = cartItem.group.locator('button:has([data-testid="cartStepper"])');
+        if (await stepperButton.count() === 0) {
+          console.log(`    WARNING: no stepper button found`);
+          continue;
+        }
+        await stepperButton.first().click();
+        console.log(`    stepper clicked`);
+
+        // Wait for the product detail page/panel with unit quantity buttons
+        const incrementBtn = page.locator('button[aria-label="Increment unit quantity"]');
+        try {
+          await incrementBtn.waitFor({ timeout: 10000 });
+        } catch {
+          // Log all button aria-labels to diagnose
+          const allLabels = await page.evaluate(() =>
+            Array.from(document.querySelectorAll('button[aria-label]'))
+              .map(b => b.getAttribute('aria-label')).join(' | ')
+          );
+          console.log(`    WARNING: increment btn not found. Labels: ${allLabels.slice(0, 300)}`);
+          await page.keyboard.press('Escape');
+          continue;
+        }
+
+        const direction = delta > 0 ? 'increment' : 'decrement';
+        const clicks    = Math.abs(delta);
+        const actionBtn = direction === 'increment'
+          ? page.locator('button[aria-label="Increment unit quantity"]')
+          : page.locator('button[aria-label="Decrement unit quantity"]');
+
+        for (let i = 0; i < clicks; i++) {
+          await actionBtn.first().click();
+          console.log(`    [${i + 1}/${clicks}] ${direction}`);
+          await page.waitForTimeout(400);
+        }
+
+        // Click the Back button/link to return to cart drawer
+        await page.waitForTimeout(500);
+        const backBtn = page.locator('button, a').filter({ hasText: /^back$/i });
+        if (await backBtn.count() > 0) {
+          await backBtn.first().click();
+          console.log(`    back clicked`);
+        } else {
+          // Log available options
+          const available = await page.evaluate(() =>
+            Array.from(document.querySelectorAll('button, a'))
+              .map(b => (b.textContent || '').trim()).filter(t => t).slice(0, 15).join(' | ')
+          );
+          console.log(`    WARNING: no Back button. Available: ${available}`);
+          await page.keyboard.press('Escape');
+        }
+        await page.waitForTimeout(1000);
+
+      } catch (e) {
+        console.log(`    adjust error: ${e.message}`);
+      }
+    }
+
+    // Items ordered but never found in cart (not in the order guide)
+    for (const key of Object.keys(targetMap)) {
+      if (!targetMap[key].found) notFound.push(key);
+    }
+
+    console.log('Done. Not in guide: ' + (notFound.length ? notFound.join(', ') : 'none'));
     await browser.close();
-    return { success: true, notFound: notFound };
+    return { success: true, notFound };
 
   } catch (e) {
     console.error('placeOrder error:', e.message);
@@ -680,36 +431,36 @@ async function placeOrder(orderItems) {
 
 // ── WHATSAPP WEBHOOK ──────────────────────────────────────────────────────────
 
-app.post('/whatsapp', async function(req, res) {
+app.post('/whatsapp', async (req, res) => {
   res.sendStatus(200);
-  var msg  = req.body.Body;
-  var from = req.body.From.replace('whatsapp:', '');
-  var name = from === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
-  console.log('From ' + name + ': ' + msg);
+  const msg  = req.body.Body;
+  const from = req.body.From.replace('whatsapp:', '');
+  const name = from === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
+  console.log(`From ${name}: ${msg}`);
 
-  if (AUTHORIZED_NUMBERS.indexOf(from) === -1) {
+  if (!AUTHORIZED_NUMBERS.includes(from)) {
     await sendWhatsApp(from, 'Not authorized');
     return;
   }
 
-  await sendWhatsApp(from, 'Got it ' + name + '! Processing your order...');
+  await sendWhatsApp(from, `Got it ${name}! Processing your order...`);
 
   try {
-    var order = await parseOrder(msg);
+    const order = await parseOrder(msg);
     if (!Array.isArray(order)) {
       await sendWhatsApp(from, 'Could not parse order. Please try again.');
       return;
     }
 
-    var summary = order.map(function(i) { return '• ' + i.quantity + 'x ' + i.item; }).join('\n');
+    const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
     await sendWhatsApp(from, 'Adding to cart:\n\n' + summary);
 
-    var result = await placeOrder(order);
+    const result = await placeOrder(order);
     if (result.success) {
-      var reply = 'Done! Review and checkout:\nmember.restaurantdepot.com/store/business/cart';
+      let reply = 'Done! Review and checkout:\nmember.restaurantdepot.com/store/business/cart';
       if (result.notFound && result.notFound.length) {
         reply += '\n\nNot in order guide — add manually:\n' +
-          result.notFound.map(function(n) { return '• ' + n; }).join('\n');
+          result.notFound.map(n => `• ${n}`).join('\n');
       }
       await sendWhatsApp(from, reply);
       await sendEmail(order, name);
@@ -722,5 +473,5 @@ app.post('/whatsapp', async function(req, res) {
   }
 });
 
-app.get('/', function(req, res) { res.send('Naan & Curry Agent running'); });
-app.listen(process.env.PORT || 3000, function() { console.log('Running'); });
+app.get('/', (req, res) => res.send('Naan & Curry Agent running'));
+app.listen(process.env.PORT || 3000, () => console.log('Running'));
