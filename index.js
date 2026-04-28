@@ -12,530 +12,464 @@ app.use(express.json());
 const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 const anthropic    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const AUTHORIZED_NUMBERS = [
-  process.env.YOUR_WHATSAPP_NUMBER,
-  process.env.RAHUL_WHATSAPP_NUMBER,
-];
+const AUTHORIZED_NUMBERS = [process.env.YOUR_WHATSAPP_NUMBER, process.env.RAHUL_WHATSAPP_NUMBER];
 
-const SINGLE_ONLY_ITEMS = [
-  'Herb - Mint- 1lb', 'Micro Orchid Flowers - 4 oz',
-  'Taylor Farms - Bagged Cilantro', 'Lemons, 71-115 ct', 'Carrots- 10 lb',
-];
+const SINGLE_ONLY_ITEMS = ['Herb - Mint- 1lb','Micro Orchid Flowers - 4 oz','Taylor Farms - Bagged Cilantro','Lemons, 71-115 ct','Carrots- 10 lb'];
 const CASE_SIZES = {
-  'Peeled Garlic': 6, 'White Cauliflower': 12, 'MILK WHL GAL GS/AN': 4,
-  "Chef's Quality - Liquid Butter Alternative - gallon": 3,
-  "Chef's Quality - Lemon Juice - gallon": 4,
-  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz": 3,
-  'James Farm - Heavy Cream, 40% - 64 oz': 6,
-  'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs': 12,
+  'Peeled Garlic':6,'White Cauliflower':12,'MILK WHL GAL GS/AN':4,
+  "Chef's Quality - Liquid Butter Alternative - gallon":3,
+  "Chef's Quality - Lemon Juice - gallon":4,
+  "Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz":3,
+  'James Farm - Heavy Cream, 40% - 64 oz':6,
+  'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs':12,
 };
 const ITEM_MAP = {
-  'yellow onions': 'Jumbo Spanish Onions - 50 lbs',
-  'red onions': 'Jumbo Red Onions - 25 lbs',
-  'potato': 'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
-  'potatoes': 'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
-  'garlic': 'Peeled Garlic', 'ginger': 'Fresh Ginger - 30 lbs',
-  'paneer': 'Royal Mahout - Paneer Loaf - 5 lbs',
-  'flowers': 'Micro Orchid Flowers - 4 oz', 'garnish': 'Micro Orchid Flowers - 4 oz',
-  'cilantro': 'Taylor Farms - Bagged Cilantro', 'cucumber': 'Cucumbers - 6 ct',
-  'cauliflower': 'White Cauliflower', 'carrots': 'Carrots- 10 lb',
-  'lemon': 'Lemons, 71-115 ct', 'lemons': 'Lemons, 71-115 ct',
-  'mint': 'Herb - Mint- 1lb', 'heavy cream': 'James Farm - Heavy Cream, 40% - 64 oz',
-  'milk': 'MILK WHL GAL GS/AN', 'yogurt': 'James Farm - Plain Yogurt - 32 lbs',
-  'cheese': 'James Farm - Shredded Cheddar Jack Cheese - 5 lbs',
-  'chicken breast': 'Boneless, Skinless Chicken Breasts, Tenders Out, Dry',
-  'chicken thighs': 'Boneless, Skinless Jumbo Chicken Thighs',
-  'chicken leg quarters': 'Fresh Chicken Leg Quarters - 40 lbs',
-  'chicken wings': 'Jumbo Chicken Party Wings (6-8 ct)',
-  'wings': 'Jumbo Chicken Party Wings (6-8 ct)',
-  'chicken leg meat': 'Fresh Boneless Skinless Chicken Leg Meat',
-  'lamb': 'Frozen Halal Boneless Lamb Leg, Australia',
-  'goat': 'Thomas Farms - Bone in Goat Cube - #15',
-  'tilapia': 'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs',
-  'fish': 'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs',
-  'frozen spinach': 'Frozen James Farm - Frozen Chopped Spinach - 3 lbs',
-  'frozen peas': 'Frozen James Farm - IQF Peas - 2.5 lbs',
-  'frozen broccoli': 'Frozen James Farm - IQF Broccoli Florets - 2 lbs',
-  'frozen 4-way mix': 'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
-  '4-way mix': 'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
-  'roti atta': 'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
-  'atta': 'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
-  'all purpose flour': "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
-  'flour': "Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
-  'baking powder': 'Clabber Girl - Baking Powder - 5 lbs',
-  'corn starch': 'Clabber Girl Cornstarch - 3 lbs',
-  'rice': "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
-  'basmati rice': "Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
-  'garbanzo': "Chef's Quality - Garbanzo Beans - #10 can",
-  'kidney beans': "Chef's Quality - Dark Red Kidney Beans - #10 cans",
-  'salt': 'Morton - Purex Salt - 50lb', 'sugar': 'C&H - Granulated Sugar - 25 lbs',
-  'tomato sauce': "Chef's Quality - Tomato Sauce - #10 cans",
-  'diced tomatoes': 'Isabella - Petite Diced Tomatoes -#10 cans',
-  'liquid butter': "Chef's Quality - Liquid Butter Alternative - gallon",
-  'cooking oil': "Chef's Quality - Soybean Salad Oil - 35 lbs",
-  'fryer oil': "Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs",
-  'canola oil': "Chef's Quality - 100% Canola Salad Oil - 35 lbs",
-  'sambal': 'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
-  'sambal chili': 'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
-  'lemon juice': "Chef's Quality - Lemon Juice - gallon",
-  'red food color': 'Felbro - Red Food Coloring - gallon',
-  'water': 'Evian - Natural Spring Water, 24 Ct, 500 mL',
-  'sprite': 'Sprite Bottles, 16.9 fl oz, 4 Pack',
-  'diet coke': 'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
+  'yellow onions':'Jumbo Spanish Onions - 50 lbs','red onions':'Jumbo Red Onions - 25 lbs',
+  'potato':'Russet Potato - 50 lb Crtn, 90 cnt, US #1','potatoes':'Russet Potato - 50 lb Crtn, 90 cnt, US #1',
+  'garlic':'Peeled Garlic','ginger':'Fresh Ginger - 30 lbs','paneer':'Royal Mahout - Paneer Loaf - 5 lbs',
+  'flowers':'Micro Orchid Flowers - 4 oz','garnish':'Micro Orchid Flowers - 4 oz',
+  'cilantro':'Taylor Farms - Bagged Cilantro','cucumber':'Cucumbers - 6 ct','cauliflower':'White Cauliflower',
+  'carrots':'Carrots- 10 lb','lemon':'Lemons, 71-115 ct','lemons':'Lemons, 71-115 ct',
+  'mint':'Herb - Mint- 1lb','heavy cream':'James Farm - Heavy Cream, 40% - 64 oz',
+  'milk':'MILK WHL GAL GS/AN','yogurt':'James Farm - Plain Yogurt - 32 lbs',
+  'cheese':'James Farm - Shredded Cheddar Jack Cheese - 5 lbs',
+  'chicken breast':'Boneless, Skinless Chicken Breasts, Tenders Out, Dry',
+  'chicken thighs':'Boneless, Skinless Jumbo Chicken Thighs',
+  'chicken leg quarters':'Fresh Chicken Leg Quarters - 40 lbs',
+  'chicken wings':'Jumbo Chicken Party Wings (6-8 ct)','wings':'Jumbo Chicken Party Wings (6-8 ct)',
+  'chicken leg meat':'Fresh Boneless Skinless Chicken Leg Meat',
+  'lamb':'Frozen Halal Boneless Lamb Leg, Australia','goat':'Thomas Farms - Bone in Goat Cube - #15',
+  'tilapia':'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs','fish':'Frozen Tilapia Fillets - 3-5 oz, IQF(China) - 10 lbs',
+  'frozen spinach':'Frozen James Farm - Frozen Chopped Spinach - 3 lbs',
+  'frozen peas':'Frozen James Farm - IQF Peas - 2.5 lbs',
+  'frozen broccoli':'Frozen James Farm - IQF Broccoli Florets - 2 lbs',
+  'frozen 4-way mix':'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
+  '4-way mix':'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
+  'roti atta':'Golden Temple - Durum Atta Flour - 2/20 lb Bag','atta':'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
+  'all purpose flour':"Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
+  'flour':"Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
+  'baking powder':'Clabber Girl - Baking Powder - 5 lbs','corn starch':'Clabber Girl Cornstarch - 3 lbs',
+  'rice':"Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
+  'basmati rice':"Royal Chef's Secret - Extra Long Grain Basmati Rice - 40 lbs",
+  'garbanzo':"Chef's Quality - Garbanzo Beans - #10 can",'kidney beans':"Chef's Quality - Dark Red Kidney Beans - #10 cans",
+  'salt':'Morton - Purex Salt - 50lb','sugar':'C&H - Granulated Sugar - 25 lbs',
+  'tomato sauce':"Chef's Quality - Tomato Sauce - #10 cans",'diced tomatoes':'Isabella - Petite Diced Tomatoes -#10 cans',
+  'liquid butter':"Chef's Quality - Liquid Butter Alternative - gallon",
+  'cooking oil':"Chef's Quality - Soybean Salad Oil - 35 lbs",
+  'fryer oil':"Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs",
+  'canola oil':"Chef's Quality - 100% Canola Salad Oil - 35 lbs",
+  'sambal':'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
+  'sambal chili':'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
+  'lemon juice':"Chef's Quality - Lemon Juice - gallon",'red food color':'Felbro - Red Food Coloring - gallon',
+  'water':'Evian - Natural Spring Water, 24 Ct, 500 mL','sprite':'Sprite Bottles, 16.9 fl oz, 4 Pack',
+  'diet coke':'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
 };
 
 async function parseOrder(message) {
-  const itemMapStr = Object.entries(ITEM_MAP).map(([k,v]) => `"${k}" -> "${v}"`).join('\n');
+  const itemMapStr = Object.entries(ITEM_MAP).map(([k,v])=>`"${k}" -> "${v}"`).join('\n');
   try {
-    const res = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001', max_tokens: 1000,
-      messages: [{ role: 'user', content:
-        'Ordering assistant for Naan & Curry.\n\nItem mapping:\n' + itemMapStr +
-        '\n\nRules: IGNORE headers/dates/names. ONLY items with quantity number. EXACT quantity. Return ONLY valid JSON array.\n\n' +
-        'Format: [{"item":"exact name from map values","quantity":NUMBER}]\n\nOrder: ' + message }],
-    });
-    const text = res.content[0].text;
-    const match = text.match(/\[[\s\S]*\]/);
-    return JSON.parse(match ? match[0] : text);
-  } catch(e) { console.error('parseOrder:', e.message); return { error: true }; }
+    const res = await anthropic.messages.create({ model:'claude-haiku-4-5-20251001', max_tokens:1000,
+      messages:[{role:'user',content:'Ordering assistant for Naan & Curry.\n\nItem mapping:\n'+itemMapStr+
+        '\n\nRules: IGNORE headers/dates/names. ONLY items with quantity. EXACT quantity. Return ONLY valid JSON array.\n\n'+
+        'Format: [{"item":"exact name from map values","quantity":NUMBER}]\n\nOrder: '+message}]});
+    const text=res.content[0].text; const match=text.match(/\[[\s\S]*\]/);
+    return JSON.parse(match?match[0]:text);
+  } catch(e){console.error('parseOrder:',e.message);return{error:true};}
 }
 
-async function sendWhatsApp(to, body) {
-  const chunks = body.match(/[\s\S]{1,1400}/g) || [body];
-  for (let i = 0; i < chunks.length; i++) {
-    await twilioClient.messages.create({
-      from: 'whatsapp:' + process.env.TWILIO_WHATSAPP_NUMBER,
-      to: 'whatsapp:' + to, body: chunks[i],
-    });
-    if (chunks.length > 1) await new Promise(r => setTimeout(r, 1000));
+async function sendWhatsApp(to,body) {
+  const chunks=body.match(/[\s\S]{1,1400}/g)||[body];
+  for(let i=0;i<chunks.length;i++){
+    await twilioClient.messages.create({from:'whatsapp:'+process.env.TWILIO_WHATSAPP_NUMBER,to:'whatsapp:'+to,body:chunks[i]});
+    if(chunks.length>1)await new Promise(r=>setTimeout(r,1000));
   }
 }
 
-async function sendEmail(orderItems, sender) {
-  const lines = orderItems.map(i => `* ${i.quantity}x ${i.item}`).join('\n');
-  await sgMail.send({
-    from: 'nicksodhi@gmail.com', to: 'nicksodhi@gmail.com',
-    subject: 'Restaurant Depot Cart Updated - ' + new Date().toLocaleDateString(),
-    text: `Order by ${sender}:\n\n${lines}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`,
-  });
+async function sendEmail(orderItems,sender) {
+  const lines=orderItems.map(i=>`* ${i.quantity}x ${i.item}`).join('\n');
+  await sgMail.send({from:'nicksodhi@gmail.com',to:'nicksodhi@gmail.com',
+    subject:'Restaurant Depot Cart Updated - '+new Date().toLocaleDateString(),
+    text:`Order by ${sender}:\n\n${lines}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`});
 }
 
-function scoreMatch(text, itemName) {
-  const t = text.toLowerCase();
-  const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ')
-    .filter(w => w.length >= 3 && !['lbs','pkg','and','the','for','all','out','can','dry'].includes(w));
-  const priority = words.filter(w => w.length >= 6);
-  let score = words.filter(w => t.includes(w)).length;
-  priority.forEach(w => { if (t.includes(w)) score += 3; });
+function scoreMatch(text,itemName) {
+  const t=text.toLowerCase();
+  const words=itemName.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(w=>w.length>=3&&!['lbs','pkg','and','the','for','all','out','can','dry'].includes(w));
+  const priority=words.filter(w=>w.length>=6);
+  let score=words.filter(w=>t.includes(w)).length;
+  priority.forEach(w=>{if(t.includes(w))score+=3;});
   return score;
 }
 
-// ── THE CORE: runs entirely inside the browser via page.evaluate ──────────────
-// Browser fetch calls use cookies automatically — no auth header management.
-// This function does everything: reads cart state, updates quantities, removes
-// items — all via GraphQL mutations from inside the authenticated browser context.
-
-const CART_OPERATIONS = `
-// Make a GraphQL call using the browser's own cookies
-async function gql(op, query, vars) {
-  const r = await fetch('/graphql', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'accept': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ operationName: op, query, variables: vars })
-  });
-  return r.json();
-}
-
-// Extract all cart items from the Apollo cache
-function getCartItemsFromCache() {
-  const cache = window.__APOLLO_CLIENT__.cache.extract();
-  const items = [];
-  
-  Object.entries(cache).forEach(([key, val]) => {
-    if (!val || typeof val !== 'object') return;
-    
-    // Match any cache entry that looks like a cart item
-    const type = (val.__typename || '').toLowerCase();
-    const hasQty = typeof val.quantity === 'number';
-    const hasId = val.id;
-    
-    if (!hasId || !hasQty) return;
-    if (!type.includes('cart') && !type.includes('item') && !type.includes('line')) return;
-    if (type.includes('order') && !type.includes('cart')) return;
-    
-    // Try to get product name from nested refs
-    let name = val.name || val.displayName || val.title || '';
-    
-    // Look up referenced objects for the name
-    if (!name) {
-      Object.values(val).forEach(v => {
-        if (v && v.__ref) {
-          const ref = cache[v.__ref];
-          if (ref) {
-            name = name || ref.name || ref.displayName || ref.title || '';
-            // Go one level deeper
-            if (!name) {
-              Object.values(ref).forEach(rv => {
-                if (rv && rv.__ref) {
-                  const ref2 = cache[rv.__ref];
-                  if (ref2) name = name || ref2.name || ref2.displayName || '';
-                }
-              });
-            }
-          }
-        }
-      });
-    }
-    
-    items.push({
-      cacheKey: key,
-      id: val.id,
-      quantity: val.quantity,
-      typename: val.__typename,
-      name: name,
-      // Keep raw val for debugging
-      fields: Object.keys(val),
-    });
-  });
-  
-  return items;
-}
-
-// Try multiple mutation structures for updating quantity
-async function updateQty(itemId, cartId, quantity) {
-  const mutations = [
-    // Instacart SFP standard mutations (most likely)
-    ['UpdateItemsInCart', \`mutation UpdateItemsInCart($input: UpdateItemsInCartInput!) { updateItemsInCart(input: $input) { __typename } }\`,
-      { input: { cartId, updates: [{ cartItemId: itemId, quantity }] } }],
-    ['UpdateCartItemQuantity', \`mutation UpdateCartItemQuantity($input: UpdateCartItemQuantityInput!) { updateCartItemQuantity(input: $input) { __typename } }\`,
-      { input: { cartItemId: itemId, quantity } }],
-    ['UpdateCartItem', \`mutation UpdateCartItem($input: UpdateCartItemInput!) { updateCartItem(input: $input) { __typename } }\`,
-      { input: { cartItemId: itemId, quantity } }],
-    ['SetCartItemQuantity', \`mutation SetCartItemQuantity($input: SetCartItemQuantityInput!) { setCartItemQuantity(input: $input) { __typename } }\`,
-      { input: { id: itemId, quantity } }],
-    ['UpdateItemQuantity', \`mutation UpdateItemQuantity($input: UpdateItemQuantityInput!) { updateItemQuantity(input: $input) { __typename } }\`,
-      { input: { cartItemId: itemId, quantity } }],
-    // Try with cartId scoping
-    ['UpdateCartItem', \`mutation UpdateCartItem($cartId: ID!, $itemId: ID!, $quantity: Int!) { updateCartItem(cartId: $cartId, itemId: $itemId, quantity: $quantity) { __typename } }\`,
-      { cartId, itemId, quantity }],
-  ];
-  
-  for (const [op, query, vars] of mutations) {
-    const result = await gql(op, query, vars);
-    if (!result.errors) {
-      return { ok: true, op };
-    }
-    // Log first error for diagnosis
-    const errMsg = result.errors?.[0]?.message || '';
-    if (errMsg.includes('PersistedQueryNotFound')) continue; // wrong hash
-    if (errMsg.includes('Cannot query field') || errMsg.includes('Unknown type')) continue; // wrong schema
-    console.log('Mutation ' + op + ' error:', errMsg.slice(0, 100));
-  }
-  return { ok: false };
-}
-
-// Try multiple mutation structures for removing an item
-async function removeItem(itemId, cartId) {
-  const mutations = [
-    ['RemoveItemsFromCart', \`mutation RemoveItemsFromCart($input: RemoveItemsFromCartInput!) { removeItemsFromCart(input: $input) { __typename } }\`,
-      { input: { cartId, cartItemIds: [itemId] } }],
-    ['RemoveCartItem', \`mutation RemoveCartItem($input: RemoveCartItemInput!) { removeCartItem(input: $input) { __typename } }\`,
-      { input: { cartItemId: itemId } }],
-    ['DeleteCartItem', \`mutation DeleteCartItem($input: DeleteCartItemInput!) { deleteCartItem(input: $input) { __typename } }\`,
-      { input: { cartItemId: itemId } }],
-    ['RemoveItemFromCart', \`mutation RemoveItemFromCart($cartId: ID!, $itemId: ID!) { removeItemFromCart(cartId: $cartId, itemId: $itemId) { __typename } }\`,
-      { cartId, itemId }],
-  ];
-  
-  for (const [op, query, vars] of mutations) {
-    const result = await gql(op, query, vars);
-    if (!result.errors) return { ok: true, op };
-  }
-  return { ok: false };
-}
-`;
-
 async function placeOrder(orderItems) {
-  const targetMap = {};
-  orderItems.forEach(oi => {
-    const isSingle = SINGLE_ONLY_ITEMS.includes(oi.item);
-    const caseSize = CASE_SIZES[oi.item] || 1;
-    const targetQty = isSingle ? oi.quantity : oi.quantity * caseSize;
-    targetMap[oi.item] = { ordered: oi, targetQty, found: false };
+  const targetMap={};
+  orderItems.forEach(oi=>{
+    const isSingle=SINGLE_ONLY_ITEMS.includes(oi.item);
+    const caseSize=CASE_SIZES[oi.item]||1;
+    const targetQty=isSingle?oi.quantity:oi.quantity*caseSize;
+    targetMap[oi.item]={ordered:oi,targetQty,found:false};
     console.log(`Target | ${oi.item}: ordered=${oi.quantity} case=${caseSize} cartQty=${targetQty}`);
   });
 
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-setuid-sandbox']});
+  const context=await browser.newContext({userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'});
+  const page=await context.newPage();
+
+  // ── NETWORK INTERCEPTION ─────────────────────────────────────────────────
+  let cartId=null;
+  // Collect ALL graphql responses that look like cart data
+  const gqlResponses=[];
+  
+  page.on('request',req=>{
+    if(!req.url().includes('/graphql'))return;
+    try{
+      // Capture cartId from GET query params
+      const url=new URL(req.url());
+      const vars=JSON.parse(url.searchParams.get('variables')||'{}');
+      if(vars.cartId&&!cartId){cartId=vars.cartId;console.log('cartId:',cartId);}
+      // Capture cartId from POST body
+      if(req.method()==='POST'){
+        const body=JSON.parse(req.postData()||'{}');
+        const v=body.variables||{};
+        if(v.cartId&&!cartId){cartId=v.cartId;console.log('cartId POST:',cartId);}
+        if(v.input?.cartId&&!cartId){cartId=v.input.cartId;console.log('cartId input:',cartId);}
+      }
+    }catch(e){}
   });
-  const page = await context.newPage();
 
-  // Capture cartId and mutation hashes from network traffic
-  let cartId = null;
-  let successfulUpdateOp = null;
-  let successfulRemoveOp = null;
-
-  page.on('request', req => {
-    if (req.method() === 'POST' && req.url().includes('/graphql')) {
-      try {
-        const body = JSON.parse(req.postData() || '{}');
-        // Extract cartId from any request that has it
-        const vars = body.variables || {};
-        if (vars.cartId && !cartId) {
-          cartId = vars.cartId;
-          console.log('Captured cartId:', cartId);
+  page.on('response',async res=>{
+    if(!res.url().includes('/graphql'))return;
+    try{
+      const url=new URL(res.url());
+      const op=url.searchParams.get('operationName')||(res.request().method()==='POST'?JSON.parse(res.request().postData()||'{}').operationName:'');
+      const text=await res.text();
+      // Store all substantial responses
+      if(text.length>200){
+        gqlResponses.push({op,text,url:res.url().slice(0,100)});
+        // Log any response mentioning cart items
+        if(text.includes('"quantity"')&&(text.includes('"id"'))&&text.length>500){
+          console.log(`GQL [${op}] len=${text.length}: ${text.slice(0,300)}`);
         }
-        if (vars.input?.cartId && !cartId) {
-          cartId = vars.input.cartId;
-          console.log('Captured cartId from input:', cartId);
-        }
-      } catch(e) {}
-    }
-    // Also capture from GET requests (queries use GET)
-    if (req.method() === 'GET' && req.url().includes('/graphql')) {
-      try {
-        const url = new URL(req.url());
-        const vars = JSON.parse(url.searchParams.get('variables') || '{}');
-        if (vars.cartId && !cartId) {
-          cartId = vars.cartId;
-          console.log('Captured cartId from GET:', cartId);
-        }
-      } catch(e) {}
-    }
+      }
+    }catch(e){}
   });
 
   try {
-    // ── LOGIN ────────────────────────────────────────────────────────────────
-    await page.goto(
-      'https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F',
-      { waitUntil: 'domcontentloaded', timeout: 30000 }
-    );
+    // ── LOGIN ───────────────────────────────────────────────────────────────
+    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F',{waitUntil:'domcontentloaded',timeout:30000});
     await page.waitForTimeout(5000);
     await page.locator('#email').fill(process.env.RD_EMAIL);
     await page.locator('input[type="password"]').fill(process.env.RD_PASSWORD);
     await page.locator('button[type="submit"]').click();
     await page.waitForTimeout(6000);
-    console.log('Logged in. cartId so far:', cartId);
+    console.log('Logged in');
+
+    // ── CLEAR CART via UI ────────────────────────────────────────────────────
+    await page.goto('https://member.restaurantdepot.com/store/business/cart',{waitUntil:'domcontentloaded',timeout:30000});
+    await page.waitForTimeout(3000);
+    let removed=0;
+    for(let i=0;i<80;i++){
+      const btn=await page.evaluate(()=>{
+        const els=Array.from(document.querySelectorAll('button,a'));
+        const b=els.find(b=>{
+          const txt=(b.textContent||'').trim().toLowerCase();
+          const aria=(b.getAttribute('aria-label')||'').toLowerCase();
+          if(aria.includes('wishlist')||aria.includes('saved'))return false;
+          return txt==='remove'||aria.includes('remove');
+        });
+        if(b){b.click();return true;}return false;
+      });
+      if(!btn)break;
+      await page.waitForTimeout(1200);
+      removed++;
+    }
+    console.log(`Cart cleared (${removed} items removed)`);
 
     // ── LOAD ORDER GUIDE ─────────────────────────────────────────────────────
-    await page.goto(
-      'https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',
-      { waitUntil: 'load', timeout: 45000 }
-    );
+    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',{waitUntil:'load',timeout:45000});
     await page.waitForTimeout(5000);
-    console.log('Order guide loaded. cartId:', cartId);
+    console.log('Order guide loaded, cartId=',cartId);
 
     // ── BULK ADD ─────────────────────────────────────────────────────────────
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const btn = page.locator('[data-testid="add-all-items-button"]');
-      if (await btn.count() > 0) {
-        try { await btn.first().click({ timeout: 3000 }); }
-        catch { await btn.first().click({ force: true }); }
-        console.log('Bulk add clicked');
-        break;
-      }
+    let bulkClicked=false;
+    for(let attempt=0;attempt<20;attempt++){
+      const clicked=await page.evaluate(()=>{
+        // Try data-testid first
+        let btn=document.querySelector('[data-testid="add-all-items-button"]');
+        if(!btn){
+          // Fallback: find by text
+          btn=Array.from(document.querySelectorAll('button')).find(b=>{
+            const m=(b.textContent||'').trim().match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
+            return m&&parseInt(m[1])>=10;
+          });
+        }
+        if(btn){btn.click();return (btn.textContent||'').trim();}
+        return null;
+      });
+      if(clicked){console.log('Bulk add clicked:',clicked);bulkClicked=true;break;}
       await page.waitForTimeout(1500);
     }
+    if(!bulkClicked)throw new Error('Bulk add button not found');
 
-    // Confirm modal — button is present but hidden, force click it
-    await page.waitForTimeout(2000);
-    try {
-      await page.waitForSelector('[data-testid="PromptModalConfirmButton"]',
-        { state: 'attached', timeout: 12000 });
-      await page.locator('[data-testid="PromptModalConfirmButton"]').first()
-        .click({ force: true });
-      console.log('Bulk add confirmed');
-    } catch(e) {
-      console.log('Confirm note:', e.message.slice(0, 100));
+    // ── CONFIRM MODAL via page.evaluate (proven to work) ────────────────────
+    // Do NOT use Playwright locator for this — the button is hidden/in a portal
+    // page.evaluate with document.querySelector reliably finds and clicks it
+    let confirmed=false;
+    for(let attempt=0;attempt<20;attempt++){
+      await page.waitForTimeout(700);
+      confirmed=await page.evaluate(()=>{
+        // Try testid first
+        const btn=document.querySelector('[data-testid="PromptModalConfirmButton"]');
+        if(btn){
+          // Check it's the "Yes, continue" button (not delete guide)
+          const dialog=btn.closest('[role="dialog"],[data-dialog-ref]');
+          const dialogText=(dialog||document.body).textContent||'';
+          if(dialogText.includes('items to cart')||dialogText.includes('Yes, continue')||!dialogText.includes('Delete')){
+            btn.click();return true;
+          }
+        }
+        // Fallback: click "Yes, continue" text button
+        const allBtns=Array.from(document.querySelectorAll('button'));
+        const yesBtn=allBtns.find(b=>/yes,?\s*continue/i.test(b.textContent));
+        if(yesBtn){yesBtn.click();return true;}
+        return false;
+      });
+      if(confirmed){console.log('Bulk add confirmed');break;}
     }
+    if(!confirmed)console.log('WARNING: Confirm may not have fired — continuing anyway');
 
-    await page.waitForTimeout(5000);
-    console.log('cartId after bulk add:', cartId);
+    await page.waitForTimeout(6000);
+    console.log('After bulk add, cartId=',cartId);
 
     // ── OPEN CART DRAWER ─────────────────────────────────────────────────────
-    for (let attempt = 0; attempt < 15; attempt++) {
-      const btn = page.locator('button[aria-label*="View Cart"], button[aria-label*="items in cart"]');
-      if (await btn.count() > 0) {
-        await btn.first().click({ force: true });
-        console.log('Cart drawer opened');
-        break;
-      }
-      await page.waitForTimeout(1000);
+    const drawerOpened=await page.evaluate(()=>{
+      const btns=Array.from(document.querySelectorAll('button'));
+      const cartBtn=btns.find(b=>{
+        const l=(b.getAttribute('aria-label')||'').toLowerCase();
+        return l.includes('view cart')||l.includes('items in cart')||l.includes('cart.');
+      });
+      if(cartBtn){cartBtn.click();return true;}
+      return false;
+    });
+    console.log('Cart drawer opened:',drawerOpened);
+    await page.waitForTimeout(5000);
+
+    // ── READ CART ITEMS FROM DOM ─────────────────────────────────────────────
+    // Apollo cache approach failed — items aren't typed the way we expected.
+    // Read directly from the rendered cart drawer DOM instead.
+    const domCartItems=await page.evaluate(()=>{
+      const groups=Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
+      return groups.map((g,idx)=>{
+        // Qty from cartStepper
+        const stepper=g.querySelector('[data-testid="cartStepper"]');
+        const qty=stepper?parseInt((stepper.textContent||'').match(/(\d+)/)?.[1]||'1'):1;
+        // Name — longest text that's not a price/label
+        const allText=Array.from(g.querySelectorAll('span,p,div,a'))
+          .filter(el=>el.children.length<=2)
+          .map(el=>(el.textContent||'').trim())
+          .filter(t=>t.length>5&&t.length<150&&!/^\$/.test(t)&&!/^(remove|replace|likely|many|about|quantity|change)/i.test(t)&&!/\d+\.?\d*\s*(lb|oz|ct|gal|#|z)\s*$/i.test(t));
+        const name=allText.reduce((a,b)=>a.length>=b.length?a:b,'');
+        return{idx,qty,name};
+      });
+    });
+    console.log(`DOM cart items: ${domCartItems.length}`);
+    domCartItems.forEach(i=>console.log(`  [${i.idx}] "${i.name}" qty=${i.qty}`));
+
+    // ── GET CART ITEM IDs FROM GRAPHQL RESPONSES ─────────────────────────────
+    // Parse all captured GQL responses to find cart item IDs
+    let cartItemsWithIds=[];
+    for(const resp of gqlResponses){
+      if(resp.text.length<200)continue;
+      try{
+        const data=JSON.parse(resp.text);
+        const str=JSON.stringify(data);
+        // Look for arrays of items with id and quantity
+        if(!str.includes('"quantity"'))continue;
+        
+        // Walk the data tree to find cart items
+        function findCartItems(obj,path=''){
+          if(!obj||typeof obj!=='object')return[];
+          const results=[];
+          if(Array.isArray(obj)){
+            obj.forEach((item,i)=>{
+              if(item&&typeof item==='object'&&'id'in item&&'quantity'in item&&typeof item.quantity==='number'){
+                results.push({id:String(item.id),quantity:item.quantity,data:item,source:resp.op,path:path+'['+i+']'});
+              }
+              results.push(...findCartItems(item,path+'['+i+']'));
+            });
+          }else{
+            Object.entries(obj).forEach(([k,v])=>{
+              if(v&&typeof v==='object'&&'id'in v&&'quantity'in v&&typeof v.quantity==='number'&&v.quantity>=0){
+                results.push({id:String(v.id),quantity:v.quantity,data:v,source:resp.op,path:path+'.'+k});
+              }
+              results.push(...findCartItems(v,path+'.'+k));
+            });
+          }
+          return results;
+        }
+        
+        const found=findCartItems(data);
+        if(found.length>0){
+          console.log(`Found ${found.length} potential cart items in [${resp.op}]`);
+          found.slice(0,5).forEach(f=>console.log(`  id=${f.id} qty=${f.quantity} path=${f.path}`));
+          cartItemsWithIds.push(...found);
+        }
+      }catch(e){}
     }
 
-    // Wait for cart items to load into Apollo cache
-    try {
-      await page.locator('[data-testid="cartStepper"]').first().waitFor({ timeout: 15000 });
-    } catch(e) {
-      console.log('cartStepper wait:', e.message.slice(0, 80));
-    }
-    await page.waitForTimeout(3000);
-    console.log('cartId before operations:', cartId);
+    // Deduplicate by id
+    const seen=new Set();
+    cartItemsWithIds=cartItemsWithIds.filter(item=>{
+      if(seen.has(item.id))return false;
+      seen.add(item.id);return true;
+    });
+    console.log(`Unique cart item IDs found: ${cartItemsWithIds.length}`);
 
-    // ── READ CART + UPDATE QUANTITIES via browser GraphQL ───────────────────
-    const result = await page.evaluate(async (params) => {
-      const { targetMap, cartIdParam, CART_OPS } = params;
-
-      // Inject all helper functions
-      eval(CART_OPS);
-
-      const log = [];
-
-      // Get cartId — prefer captured from network, fall back to Apollo cache
-      let cartId = cartIdParam;
-      if (!cartId) {
-        try {
-          const cache = window.__APOLLO_CLIENT__.cache.extract();
-          // Look for cartId in ROOT_QUERY
-          const rootQuery = cache.ROOT_QUERY || {};
-          Object.values(rootQuery).forEach(v => {
-            if (v && v.__ref && v.__ref.startsWith('Cart:')) {
-              cartId = v.__ref.replace('Cart:', '');
-            }
-          });
-          // Also look in CartSignaledEta or similar
-          Object.entries(cache).forEach(([k, v]) => {
-            if (k.startsWith('Cart:') && !cartId) cartId = v.id || k.replace('Cart:', '');
-          });
-        } catch(e) { log.push('cartId lookup error: ' + e.message); }
+    // ── MATCH DOM ITEMS TO ORDERED ITEMS ────────────────────────────────────
+    // Use DOM for names/quantities, GQL responses for IDs
+    const matchedItems=[];
+    domCartItems.forEach((domItem,domIdx)=>{
+      // Find best matching ordered item
+      let bestKey=null,bestScore=0;
+      for(const key of Object.keys(targetMap)){
+        const s=scoreMatch(domItem.name,key);
+        if(s>bestScore){bestScore=s;bestKey=key;}
       }
-      log.push('Using cartId: ' + cartId);
-
-      // Read cart items from Apollo cache
-      const cartItems = getCartItemsFromCache();
-      log.push('Cart items in cache: ' + cartItems.length);
-
-      // Log all typenames found to understand cache structure
-      const cache = window.__APOLLO_CLIENT__.cache.extract();
-      const typenames = [...new Set(Object.values(cache).map(v => v && v.__typename).filter(Boolean))];
-      log.push('Typenames: ' + typenames.join(', '));
-
-      // Log all cache keys for diagnosis
-      const allKeys = Object.keys(cache);
-      log.push('Cache keys (' + allKeys.length + '): ' + allKeys.slice(0, 40).join(', '));
-
-      if (cartItems.length === 0) {
-        // If no items in cache by typename, try reading from DOM
-        // The cart drawer has [data-testid="cartStepper"] spans with qty
-        // and the parent groups have product names
-        const groups = Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
-        log.push('DOM cart groups: ' + groups.length);
-        
-        groups.forEach((g, i) => {
-          const stepper = g.querySelector('[data-testid="cartStepper"]');
-          const qty = stepper ? parseInt((stepper.textContent || '').match(/\d+/)?.[0] || '1') : 1;
-          const text = g.textContent.slice(0, 100);
-          log.push('DOM item ' + i + ': qty=' + qty + ' text=' + text.replace(/\n/g, ' ').trim().slice(0, 60));
-        });
-        
-        return { log, cartItems: [], cartId, done: false };
-      }
-
-      // Process each cart item
-      const results = [];
-      for (const item of cartItems) {
-        // Find best match in target items
-        let bestKey = null, bestScore = 0;
-        const searchText = (item.name + ' ' + item.cacheKey + ' ' + item.typename).toLowerCase();
-        
-        for (const key of Object.keys(targetMap)) {
-          const words = key.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ')
-            .filter(w => w.length >= 3);
-          const priority = words.filter(w => w.length >= 5);
-          let score = words.filter(w => searchText.includes(w)).length;
-          priority.forEach(w => { if (searchText.includes(w)) score += 3; });
-          if (score > bestScore) { bestScore = score; bestKey = key; }
-        }
-
-        if (!bestKey || bestScore === 0) {
-          // Remove — not in order
-          const r = await removeItem(item.id, cartId);
-          results.push({ action: 'remove', id: item.id, name: item.name, ...r });
-          continue;
-        }
-
-        targetMap[bestKey].found = true;
-        const targetQty = targetMap[bestKey].targetQty;
-
-        if (item.quantity === targetQty) {
-          results.push({ action: 'skip', name: bestKey, qty: targetQty });
-          continue;
-        }
-
-        // Update quantity
-        const r = await updateQty(item.id, cartId, targetQty);
-        results.push({ action: 'update', name: bestKey, from: item.quantity, to: targetQty, ...r });
-      }
-
-      // Report not found
-      const notFound = Object.entries(targetMap)
-        .filter(([k, v]) => !v.found).map(([k]) => k);
-
-      return { log, cartItems: cartItems.length, results, notFound, cartId, done: true };
-    }, {
-      targetMap: Object.fromEntries(Object.entries(targetMap).map(([k, v]) => [k, { targetQty: v.targetQty, found: v.found }])),
-      cartIdParam: cartId,
-      CART_OPS: CART_OPERATIONS,
+      // Find matching ID from GQL responses (by index or quantity match)
+      const gqlItem=cartItemsWithIds[domIdx]||null;
+      matchedItems.push({
+        domIdx,name:domItem.name,currentQty:domItem.qty,
+        orderedKey:bestKey,orderedScore:bestScore,
+        id:gqlItem?.id||null,
+        targetQty:bestKey?targetMap[bestKey].targetQty:null,
+      });
+      if(bestKey)targetMap[bestKey].found=true;
     });
 
-    // Log everything
-    (result.log || []).forEach(l => console.log('CACHE:', l));
-    (result.results || []).forEach(r => console.log('ACTION:', JSON.stringify(r)));
-    console.log('Not found:', (result.notFound || []).join(', ') || 'none');
-    console.log('Done:', result.done, '| Cart items processed:', result.cartItems);
+    // ── UPDATE QUANTITIES + REMOVE via browser fetch ─────────────────────────
+    const updateResult=await page.evaluate(async(params)=>{
+      const{matchedItems,cartId,targetMap}=params;
+      const results=[];
 
-    // If Apollo cache had no items, we need the UI fallback
-    if (!result.done) {
-      console.log('Apollo cache empty — cart items must be read from DOM directly');
-      console.log('Check logs for DOM item count and text samples above');
-    }
+      async function gqlFetch(op,query,vars){
+        const r=await fetch('/graphql',{method:'POST',
+          headers:{'content-type':'application/json','accept':'application/json'},
+          credentials:'include',
+          body:JSON.stringify({operationName:op,query,variables:vars})});
+        return r.json();
+      }
+
+      // Try all known mutation structures for update
+      async function tryUpdate(id,qty,cartId){
+        const mutations=[
+          ['UpdateItemsInCart',`mutation UpdateItemsInCart($input:UpdateItemsInCartInput!){updateItemsInCart(input:$input){__typename}}`,{input:{cartId,updates:[{cartItemId:id,quantity:qty}]}}],
+          ['UpdateCartItemQuantity',`mutation UpdateCartItemQuantity($input:UpdateCartItemQuantityInput!){updateCartItemQuantity(input:$input){__typename}}`,{input:{cartItemId:id,quantity:qty}}],
+          ['UpdateCartItem',`mutation UpdateCartItem($input:UpdateCartItemInput!){updateCartItem(input:$input){__typename}}`,{input:{cartItemId:id,quantity:qty}}],
+          ['ChangeItemQuantity',`mutation ChangeItemQuantity($input:ChangeItemQuantityInput!){changeItemQuantity(input:$input){__typename}}`,{input:{id,quantity:qty,cartId}}],
+          ['SetItemQuantity',`mutation SetItemQuantity($cartItemId:ID!,$quantity:Int!){setItemQuantity(cartItemId:$cartItemId,quantity:$quantity){__typename}}`,{cartItemId:id,quantity:qty}],
+          // Try with cartId at top level
+          ['UpdateItemsInCart',`mutation UpdateItemsInCart($cartId:ID!,$updates:[CartItemUpdateInput!]!){updateItemsInCart(cartId:$cartId,updates:$updates){__typename}}`,{cartId,updates:[{cartItemId:id,quantity:qty}]}],
+        ];
+        for(const[op,query,vars]of mutations){
+          const d=await gqlFetch(op,query,vars);
+          if(!d.errors)return{ok:true,op};
+          const msg=(d.errors[0]?.message||'').toLowerCase();
+          // If it's a field/type error, wrong mutation — try next
+          if(msg.includes('cannot query field')||msg.includes('unknown type')||msg.includes('does not exist'))continue;
+          // If it's a permissions or auth error, report it
+          return{ok:false,op,err:d.errors[0]?.message};
+        }
+        return{ok:false,err:'all mutations failed'};
+      }
+
+      async function tryRemove(id,cartId){
+        const mutations=[
+          ['RemoveItemsFromCart',`mutation RemoveItemsFromCart($input:RemoveItemsFromCartInput!){removeItemsFromCart(input:$input){__typename}}`,{input:{cartId,cartItemIds:[id]}}],
+          ['RemoveCartItem',`mutation RemoveCartItem($input:RemoveCartItemInput!){removeCartItem(input:$input){__typename}}`,{input:{cartItemId:id}}],
+          ['DeleteCartItem',`mutation DeleteCartItem($input:DeleteCartItemInput!){deleteCartItem(input:$input){__typename}}`,{input:{cartItemId:id}}],
+          ['RemoveItemFromCart',`mutation RemoveItemFromCart($cartId:ID!,$itemId:ID!){removeItemFromCart(cartId:$cartId,itemId:$itemId){__typename}}`,{cartId,itemId:id}],
+        ];
+        for(const[op,query,vars]of mutations){
+          const d=await gqlFetch(op,query,vars);
+          if(!d.errors)return{ok:true,op};
+          const msg=(d.errors[0]?.message||'').toLowerCase();
+          if(msg.includes('cannot query field')||msg.includes('unknown type'))continue;
+          return{ok:false,op,err:d.errors[0]?.message};
+        }
+        return{ok:false,err:'all remove mutations failed'};
+      }
+
+      for(const item of matchedItems){
+        if(!item.orderedKey||item.orderedScore===0){
+          // Remove item — not in order
+          if(item.id){
+            const r=await tryRemove(item.id,cartId);
+            results.push({action:'remove',name:item.name,id:item.id,...r});
+          }else{
+            results.push({action:'remove-no-id',name:item.name});
+          }
+          continue;
+        }
+
+        if(item.currentQty===item.targetQty){
+          results.push({action:'skip',name:item.orderedKey,qty:item.targetQty});
+          continue;
+        }
+
+        if(item.id){
+          const r=await tryUpdate(item.id,item.targetQty,cartId);
+          results.push({action:'update',name:item.orderedKey,from:item.currentQty,to:item.targetQty,id:item.id,...r});
+        }else{
+          results.push({action:'update-no-id',name:item.orderedKey,from:item.currentQty,to:item.targetQty});
+        }
+      }
+
+      return results;
+    },{matchedItems,cartId,targetMap:Object.fromEntries(Object.entries(targetMap).map(([k,v])=>[k,{targetQty:v.targetQty}]))});
+
+    console.log('\n=== RESULTS ===');
+    updateResult.forEach(r=>console.log(JSON.stringify(r)));
+
+    const notFound=Object.entries(targetMap).filter(([k,v])=>!v.found).map(([k])=>k);
+    console.log('Not found:',notFound.join(', ')||'none');
 
     await browser.close();
-    return {
-      success: true,
-      notFound: result.notFound || Object.keys(targetMap),
-    };
+    return{success:true,notFound};
 
-  } catch(e) {
-    console.error('placeOrder error:', e.message);
-    try { await browser.close(); } catch(_) {}
-    return { success: false, error: e.message };
+  }catch(e){
+    console.error('placeOrder error:',e.message);
+    try{await browser.close();}catch(_){}
+    return{success:false,error:e.message};
   }
 }
 
-// ── WHATSAPP WEBHOOK ──────────────────────────────────────────────────────────
-
-app.post('/whatsapp', async (req, res) => {
+app.post('/whatsapp',async(req,res)=>{
   res.sendStatus(200);
-  const msg  = req.body.Body;
-  const from = req.body.From.replace('whatsapp:', '');
-  const name = from === process.env.YOUR_WHATSAPP_NUMBER ? 'Nick' : 'Rahul';
+  const msg=req.body.Body;
+  const from=req.body.From.replace('whatsapp:','');
+  const name=from===process.env.YOUR_WHATSAPP_NUMBER?'Nick':'Rahul';
   console.log(`From ${name}: ${msg}`);
-  if (!AUTHORIZED_NUMBERS.includes(from)) { await sendWhatsApp(from, 'Not authorized'); return; }
-  await sendWhatsApp(from, `Got it ${name}! Placing order...`);
-  try {
-    const order = await parseOrder(msg);
-    if (!Array.isArray(order)) { await sendWhatsApp(from, 'Could not parse order.'); return; }
-    const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
-    await sendWhatsApp(from, 'Order:\n\n' + summary);
-    const result = await placeOrder(order);
-    if (result.success) {
-      let reply = 'Done! Review:\nmember.restaurantdepot.com/store/business/cart';
-      if (result.notFound?.length) {
-        reply += '\n\nAdd manually:\n' + result.notFound.map(n => `• ${n}`).join('\n');
-      }
-      await sendWhatsApp(from, reply);
-      await sendEmail(order, name);
-    } else {
-      await sendWhatsApp(from, 'Error: ' + result.error);
+  if(!AUTHORIZED_NUMBERS.includes(from)){await sendWhatsApp(from,'Not authorized');return;}
+  await sendWhatsApp(from,`Got it ${name}! Placing order...`);
+  try{
+    const order=await parseOrder(msg);
+    if(!Array.isArray(order)){await sendWhatsApp(from,'Could not parse order.');return;}
+    const summary=order.map(i=>`• ${i.quantity}x ${i.item}`).join('\n');
+    await sendWhatsApp(from,'Order:\n\n'+summary);
+    const result=await placeOrder(order);
+    if(result.success){
+      let reply='Done! Review:\nmember.restaurantdepot.com/store/business/cart';
+      if(result.notFound?.length)reply+='\n\nAdd manually:\n'+result.notFound.map(n=>`• ${n}`).join('\n');
+      await sendWhatsApp(from,reply);
+      await sendEmail(order,name);
+    }else{
+      await sendWhatsApp(from,'Error: '+result.error);
     }
-  } catch(e) {
-    console.error('Handler:', e.message);
-    await sendWhatsApp(from, 'Error placing order.');
+  }catch(e){
+    console.error('Handler:',e.message);
+    await sendWhatsApp(from,'Error placing order.');
   }
 });
 
-app.get('/', (req, res) => res.send('Naan & Curry Agent'));
-app.listen(process.env.PORT || 3000, () => console.log('Running'));
+app.get('/',(req,res)=>res.send('Naan & Curry Agent'));
+app.listen(process.env.PORT||3000,()=>console.log('Running'));
