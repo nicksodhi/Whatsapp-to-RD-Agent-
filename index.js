@@ -409,68 +409,116 @@ async function placeOrder(orderItems) {
     console.log(`CartItemId→Name map size: ${Object.keys(cartItemIdToName).length}`);
     Object.entries(cartItemIdToName).slice(0,8).forEach(([cid,name])=>console.log(`  ${cid} → ${name}`));
 
-    // Step 5: Also read DOM for name→cartItemId via matching
+    // Step 5: Read DOM groups WITH cartItemId from React fiber
+    // The cart drawer's product groups have React props containing the cartItemId.
+    // Walking the fiber tree extracts it directly — no fuzzy matching needed.
     const domGroups=await page.evaluate(()=>{
       const groups=Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
       return groups.map(g=>{
+        // Quantity from cartStepper
         const stepper=g.querySelector('[data-testid="cartStepper"]');
         const qty=stepper?parseInt((stepper.textContent||'').match(/(\d+)/)?.[1]||'1'):1;
+        // Name from longest visible text line
         const lines=Array.from(g.querySelectorAll('span,p,div,a'))
           .filter(el=>el.children.length<=2)
           .map(el=>(el.textContent||'').trim())
           .filter(t=>t.length>5&&t.length<150&&!/^\$/.test(t)&&!/^(remove|replace|likely|many|about|quantity|change)/i.test(t));
         const name=lines.reduce((a,b)=>a.length>=b.length?a:b,'');
-        return{name,qty};
+        // Walk React fiber to find cartItemId (id, cartItemId, itemId in props)
+        let cartItemId=null, productId=null;
+        const fiberKey=Object.keys(g).find(k=>k.startsWith('__reactFiber')||k.startsWith('__reactInternalInstance'));
+        if(fiberKey){
+          let fiber=g[fiberKey];
+          let depth=0;
+          while(fiber&&depth<25){
+            const props=fiber.memoizedProps||fiber.pendingProps||{};
+            // Look for any field that looks like a cart item id (numeric, 10+ digits)
+            for(const k of Object.keys(props)){
+              const v=props[k];
+              if(typeof v==='string'&&/^\d{10,}$/.test(v)){
+                if(!cartItemId&&(k==='id'||k==='cartItemId'||k.toLowerCase().includes('cartitem'))){
+                  cartItemId=v;
+                }
+              }
+              // Look for productId
+              if(typeof v==='string'&&/^\d{4,9}$/.test(v)&&!productId&&(k==='productId'||k.toLowerCase().includes('product'))){
+                productId=v;
+              }
+              // Also recursively check nested objects (one level)
+              if(v&&typeof v==='object'&&!Array.isArray(v)){
+                for(const k2 of Object.keys(v)){
+                  const v2=v[k2];
+                  if(typeof v2==='string'&&/^\d{10,}$/.test(v2)&&!cartItemId&&(k2==='id'||k2==='cartItemId')){
+                    cartItemId=v2;
+                  }
+                  if(typeof v2==='string'&&/^\d{4,9}$/.test(v2)&&!productId&&k2==='productId'){
+                    productId=v2;
+                  }
+                }
+              }
+            }
+            if(cartItemId&&productId)break;
+            fiber=fiber.return;
+            depth++;
+          }
+        }
+        return{name,qty,cartItemId,productId};
       });
     });
     console.log(`DOM groups: ${domGroups.length}`);
+    domGroups.slice(0,5).forEach((g,i)=>console.log(`  DOM[${i}] "${g.name.slice(0,50)}" qty=${g.qty} cartItemId=${g.cartItemId} productId=${g.productId}`));
 
     // ── MATCH ORDERED ITEMS TO CART ITEM IDs ─────────────────────────────────
     // Match each ordered item to a cart item ID
     const actions=[]; // {cartItemId, name, currentQty, targetQty, action:'update'|'remove'|'skip'}
 
-    // CRITICAL FIX: Each ordered item can match AT MOST ONE cart item.
-    // We iterate ordered items first and find their best cart item match.
-    // Cart items not matched to any order get REMOVED.
+    // CRITICAL FIX: Use DOM groups directly. Each DOM group has the visible name
+    // AND cartItemId from React fiber. This avoids the bad index-based pairing.
+    // Fall back to allCartItems by index for any DOM groups missing cartItemId.
     const usedCartItemIds = new Set();
-    const matchedTargets = new Set();
 
-    // Build a list of cart items with their best name (Apollo > DOM by index)
-    const cartItemsWithNames = allCartItems.map((ci, idx) => ({
-      ...ci,
-      name: cartItemIdToName[ci.cartItemId] || (domGroups[idx]?.name || ''),
-    }));
+    // Build cart entries: prefer DOM cartItemId, fall back to allCartItems by index
+    const cartEntries = domGroups.map((dom, idx) => {
+      const cid = dom.cartItemId || allCartItems[idx]?.cartItemId;
+      const ci = allCartItems.find(x => x.cartItemId === cid) || allCartItems[idx];
+      return {
+        cartItemId: cid,
+        itemIdPrefixed: (dom.productId ? `items_473296-${dom.productId}` : ci?.itemIdPrefixed) || ci?.itemIdPrefixed,
+        name: dom.name,
+        quantity: dom.qty,
+      };
+    }).filter(e => e.cartItemId && e.name);
 
-    // For each ORDERED item, find its single best matching cart item
+    console.log(`Cart entries built: ${cartEntries.length}`);
+    cartEntries.slice(0,5).forEach(e => console.log(`  entry: "${e.name.slice(0,40)}" qty=${e.quantity} id=${e.cartItemId} prefixed=${e.itemIdPrefixed}`));
+
+    // For each ORDERED item, find single best matching cart entry by name
     for (const orderedKey of Object.keys(targetMap)) {
-      let bestCi = null, bestScore = 0;
-      for (const ci of cartItemsWithNames) {
-        if (usedCartItemIds.has(ci.cartItemId)) continue;
-        if (!ci.name) continue;
-        const s = score(ci.name, orderedKey);
-        if (s > bestScore) { bestScore = s; bestCi = ci; }
+      let best = null, bestScore = 0;
+      for (const e of cartEntries) {
+        if (usedCartItemIds.has(e.cartItemId)) continue;
+        const s = score(e.name, orderedKey);
+        if (s > bestScore) { bestScore = s; best = e; }
       }
-      // Require strong match (at least 3 points) to prevent fuzzy mismatches
-      if (bestCi && bestScore >= 3) {
-        usedCartItemIds.add(bestCi.cartItemId);
-        matchedTargets.add(orderedKey);
+      if (best && bestScore >= 3) {
+        usedCartItemIds.add(best.cartItemId);
         targetMap[orderedKey].found = true;
         const tq = targetMap[orderedKey].targetQty;
-        if (bestCi.quantity === tq) {
-          actions.push({cartItemId:bestCi.cartItemId,itemIdPrefixed:bestCi.itemIdPrefixed,name:orderedKey,currentQty:bestCi.quantity,targetQty:tq,action:'skip'});
+        if (best.quantity === tq) {
+          actions.push({cartItemId:best.cartItemId,itemIdPrefixed:best.itemIdPrefixed,name:orderedKey,currentQty:best.quantity,targetQty:tq,action:'skip'});
         } else {
-          actions.push({cartItemId:bestCi.cartItemId,itemIdPrefixed:bestCi.itemIdPrefixed,name:orderedKey,currentQty:bestCi.quantity,targetQty:tq,action:'update'});
+          actions.push({cartItemId:best.cartItemId,itemIdPrefixed:best.itemIdPrefixed,name:orderedKey,currentQty:best.quantity,targetQty:tq,action:'update'});
         }
-        console.log(`  matched: "${orderedKey}" → "${bestCi.name}" (score=${bestScore}, id=${bestCi.cartItemId})`);
+        console.log(`  matched: "${orderedKey}" → "${best.name.slice(0,50)}" (score=${bestScore})`);
       } else {
-        console.log(`  unmatched ordered: "${orderedKey}" (best score=${bestScore})`);
+        console.log(`  unmatched ordered: "${orderedKey}" (best=${bestScore})`);
       }
     }
 
-    // ALL cart items NOT matched to any order → REMOVE
-    cartItemsWithNames.forEach(ci => {
-      if (usedCartItemIds.has(ci.cartItemId)) return;
-      actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:ci.name||ci.cartItemId,currentQty:ci.quantity,targetQty:0,action:'remove'});
+    // Cart entries NOT matched → REMOVE
+    cartEntries.forEach(e => {
+      if (usedCartItemIds.has(e.cartItemId)) return;
+      actions.push({cartItemId:e.cartItemId,itemIdPrefixed:e.itemIdPrefixed,name:e.name,currentQty:e.quantity,targetQty:0,action:'remove'});
     });
 
     console.log(`Actions: ${actions.length} (updates=${actions.filter(a=>a.action==='update').length} removes=${actions.filter(a=>a.action==='remove').length} skips=${actions.filter(a=>a.action==='skip').length})`);
