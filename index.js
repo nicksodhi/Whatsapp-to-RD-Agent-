@@ -596,9 +596,11 @@ async function placeOrder(orderItems) {
     if (!drawerOpened) throw new Error('Could not find cart icon button to open drawer');
     console.log('Cart drawer opened');
 
-    // Wait for product group elements to appear in the drawer
-    await page.waitForSelector('[aria-label="product"][role="group"]', { timeout: 20000 });
-    await page.waitForTimeout(1500); // let all items render
+    // Wait for cartStepper elements — these only exist inside the cart drawer,
+    // NOT on the order guide page. Using [aria-label="product"][role="group"]
+    // was matching order guide cards before the drawer loaded, giving 0 items.
+    await page.waitForSelector('[data-testid="cartStepper"]', { timeout: 20000 });
+    await page.waitForTimeout(2000); // let all items render fully
 
     // Read cart items — retry if needed
     var cartItems = [];
