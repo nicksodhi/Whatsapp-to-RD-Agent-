@@ -91,10 +91,14 @@ async function sendEmail(items, sender) {
 
 function score(text, name) {
   const t=text.toLowerCase();
-  const words=name.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(w=>w.length>=3&&!['lbs','pkg','and','the','for','all','out','can','dry'].includes(w));
-  const pri=words.filter(w=>w.length>=6);
-  let s=words.filter(w=>t.includes(w)).length;
-  pri.forEach(w=>{if(t.includes(w))s+=3;});
+  // Filter out generic packaging/qty words that match too many items
+  const stop=['lbs','pkg','and','the','for','all','out','can','dry','gal','each','about','fresh','frozen','bag','oz','ct','jar'];
+  const words=name.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(w=>w.length>=3&&!stop.includes(w));
+  const pri=words.filter(w=>w.length>=5);          // medium-distinctive
+  const dist=words.filter(w=>w.length>=7);          // highly distinctive (brand names, etc.)
+  let s=words.filter(w=>t.includes(w)).length;     // base: 1pt per word match
+  pri.forEach(w=>{if(t.includes(w))s+=3;});         // +3 for medium-distinctive
+  dist.forEach(w=>{if(t.includes(w))s+=5;});        // +5 for super-distinctive
   return s;
 }
 
@@ -500,7 +504,7 @@ async function placeOrder(orderItems) {
         const s = score(e.name, orderedKey);
         if (s > bestScore) { bestScore = s; best = e; }
       }
-      if (best && bestScore >= 3) {
+      if (best && bestScore >= 2) {
         usedCartItemIds.add(best.cartItemId);
         targetMap[orderedKey].found = true;
         const tq = targetMap[orderedKey].targetQty;
