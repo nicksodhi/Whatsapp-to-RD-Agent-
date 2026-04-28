@@ -259,11 +259,18 @@ async function placeOrder(orderItems) {
         const items = resp?.data?.updateCartItems?.cart?.cartItemCollection?.cartItems||[];
         console.log(`UpdateCartItemsMutation has ${items.length} cart items`);
         items.forEach(item=>{
+          // The mutation needs itemId in "items_RETAILERLOC-PRODUCTID" format.
+          // Build it if not present in response.
+          let itemIdPrefixed = item.itemId;
+          if (!itemIdPrefixed && item.productId) {
+            // retailerLocationId is 473296 (Las Vegas store - from captured request)
+            itemIdPrefixed = `items_473296-${item.productId}`;
+          }
           allCartItems.push({
-            cartItemId: String(item.id),
+            cartItemId: String(item.id),    // numeric cart line ID (33324136827)
+            itemIdPrefixed: itemIdPrefixed,  // prefixed item ID for mutations (items_473296-XXX)
             quantity: item.quantity,
             productId: item.productId||item.product?.id||null,
-            itemId: item.itemId||null,
             legacyId: item.legacyId||null,
           });
         });
@@ -353,14 +360,14 @@ async function placeOrder(orderItems) {
 
       usedCartItemIds.add(ci.cartItemId);
       if(!bestKey||bestS===0){
-        actions.push({cartItemId:ci.cartItemId,name:ciName,currentQty:ci.quantity,targetQty:0,action:'remove'});
+        actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:ciName,currentQty:ci.quantity,targetQty:0,action:'remove'});
       } else {
         targetMap[bestKey].found=true;
         const tq=targetMap[bestKey].targetQty;
         if(ci.quantity===tq){
-          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
+          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
         } else {
-          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
+          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
         }
       }
     });
@@ -377,14 +384,14 @@ async function placeOrder(orderItems) {
       }
       usedCartItemIds.add(ci.cartItemId);
       if(!bestKey||bestS===0){
-        actions.push({cartItemId:ci.cartItemId,name:dom.name,currentQty:ci.quantity,targetQty:0,action:'remove'});
+        actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:dom.name,currentQty:ci.quantity,targetQty:0,action:'remove'});
       } else {
         targetMap[bestKey].found=true;
         const tq=targetMap[bestKey].targetQty;
         if(ci.quantity===tq){
-          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
+          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
         } else {
-          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
+          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
         }
       }
     });
@@ -420,49 +427,47 @@ async function placeOrder(orderItems) {
         }
       }
 
-      // Update quantity — try UpdateCartItemsMutation first (confirmed working)
-      // then fall back to other mutations
-      async function updateQty(cartItemId, targetQty, cartId, hash) {
+      // CONFIRMED EXACT STRUCTURE from network capture:
+      // {"cartItemUpdates":[{"itemId":"items_473296-XXXXXXX","quantity":N,"quantityType":"each",...}]}
+      // The itemId is the prefixed format (items_RETAILERLOC-PRODUCTID), NOT the numeric cart item ID.
+      async function updateQty(itemIdPrefixed, targetQty, cartId, hash) {
+        // Build minimal trackingParams (the site sends huge ones but minimal should work)
+        const trackingParams = { trackingProperties: { source: 'cart' } };
         const mutations = [
-          // Use the actual captured mutation name and hash
-          ['UpdateCartItemsMutation', null, { cartId, updates: [{ cartItemId, quantity: targetQty }] }, hash],
-          ['UpdateCartItemsMutation', null, { cartId, items: [{ id: cartItemId, quantity: targetQty }] }, hash],
-          ['UpdateCartItemsMutation', null, { cartId, items: [{ cartItemId, quantity: targetQty }] }, hash],
-          // Without hash (full query)
-          ['UpdateItemsInCart', 'mutation UpdateItemsInCart($input:UpdateItemsInCartInput!){updateItemsInCart(input:$input){__typename}}', { input: { cartId, updates: [{ cartItemId, quantity: targetQty }] } }, null],
-          ['UpdateCartItem', 'mutation UpdateCartItem($input:UpdateCartItemInput!){updateCartItem(input:$input){__typename}}', { input: { cartItemId, quantity: targetQty } }, null],
-          ['UpdateCartItemQuantity', 'mutation UpdateCartItemQuantity($input:UpdateCartItemQuantityInput!){updateCartItemQuantity(input:$input){__typename}}', { input: { cartItemId, quantity: targetQty } }, null],
+          // Shape 1 — exact match to captured request
+          ['UpdateCartItemsMutation', null, {
+            cartItemUpdates: [{
+              itemId: itemIdPrefixed,
+              quantity: targetQty,
+              quantityType: 'each',
+              trackingParams,
+            }]
+          }, hash],
+          // Shape 2 — without trackingParams
+          ['UpdateCartItemsMutation', null, {
+            cartItemUpdates: [{
+              itemId: itemIdPrefixed,
+              quantity: targetQty,
+              quantityType: 'each',
+            }]
+          }, hash],
+          // Shape 3 — bare minimum
+          ['UpdateCartItemsMutation', null, {
+            cartItemUpdates: [{ itemId: itemIdPrefixed, quantity: targetQty }]
+          }, hash],
         ];
         for (const [op, query, vars, h] of mutations) {
           const d = await gqlFetch(op, query, vars, h);
-          if (!d.errors) return { ok: true, op };
-          const msg = (d.errors[0]?.message || '').toLowerCase();
-          // Log the first real error we get (not just schema mismatches)
-          if (!msg.includes('cannot query field') && !msg.includes('unknown type') && !msg.includes('does not exist') && !msg.includes('field') && !msg.includes('type')) {
-            return { ok: false, op, err: d.errors[0]?.message };
-          }
+          if (!d.errors) return { ok: true, op, shape: Object.keys(vars.cartItemUpdates[0]).join(',') };
+          // Log first error for diagnosis
+          console.log('updateQty err:', (d.errors[0]?.message || '').slice(0, 150));
         }
-        // Last resort: log all errors
-        return { ok: false, err: 'all update mutations failed' };
+        return { ok: false, err: 'all variants failed' };
       }
 
-      async function removeItem(cartItemId, cartId, hash) {
-        const mutations = [
-          ['UpdateCartItemsMutation', null, { cartId, updates: [{ cartItemId, quantity: 0 }] }, hash],
-          ['UpdateCartItemsMutation', null, { cartId, items: [{ cartItemId, quantity: 0 }] }, hash],
-          ['RemoveItemsFromCart', 'mutation RemoveItemsFromCart($input:RemoveItemsFromCartInput!){removeItemsFromCart(input:$input){__typename}}', { input: { cartId, cartItemIds: [cartItemId] } }, null],
-          ['RemoveCartItem', 'mutation RemoveCartItem($input:RemoveCartItemInput!){removeCartItem(input:$input){__typename}}', { input: { cartItemId } }, null],
-          ['DeleteCartItem', 'mutation DeleteCartItem($input:DeleteCartItemInput!){deleteCartItem(input:$input){__typename}}', { input: { cartItemId } }, null],
-        ];
-        for (const [op, query, vars, h] of mutations) {
-          const d = await gqlFetch(op, query, vars, h);
-          if (!d.errors) return { ok: true, op };
-          const msg = (d.errors[0]?.message || '').toLowerCase();
-          if (!msg.includes('cannot query field') && !msg.includes('unknown type') && !msg.includes('field') && !msg.includes('type')) {
-            return { ok: false, op, err: d.errors[0]?.message };
-          }
-        }
-        return { ok: false, err: 'all remove mutations failed' };
+      // Remove = quantity 0 with same mutation
+      async function removeItem(itemIdPrefixed, cartId, hash) {
+        return await updateQty(itemIdPrefixed, 0, cartId, hash);
       }
 
       for (const action of actions) {
@@ -470,10 +475,10 @@ async function placeOrder(orderItems) {
           if (action.action === 'skip') {
             results.push({ action: 'skip', name: action.name, qty: action.targetQty });
           } else if (action.action === 'update') {
-            const r = await updateQty(action.cartItemId, action.targetQty, cartId, updateMutationHash);
-            results.push({ action: 'update', name: action.name, from: action.currentQty, to: action.targetQty, id: action.cartItemId, ...r });
+            const r = await updateQty(action.itemIdPrefixed, action.targetQty, cartId, updateMutationHash);
+            results.push({ action: 'update', name: action.name, from: action.currentQty, to: action.targetQty, id: action.itemIdPrefixed, ...r });
           } else if (action.action === 'remove') {
-            const r = await removeItem(action.cartItemId, cartId, updateMutationHash);
+            const r = await removeItem(action.itemIdPrefixed, cartId, updateMutationHash);
             results.push({ action: 'remove', name: action.name, id: action.cartItemId, ...r });
           }
         } catch(e) {
