@@ -260,15 +260,17 @@ async function clickStepperForItem(page, itemName) {
       var score = words.filter(function(w) { return text.includes(w); }).length;
       if (score > bestScore) { bestScore = score; best = g; }
     });
-    if (!best || bestScore === 0) return 'no-match';
-    var stepperBtn = best.querySelector('[data-testid="cartStepper"]');
-    if (!stepperBtn) {
-      // Fallback: click the first button in the group (which wraps the stepper)
-      stepperBtn = best.querySelector('button');
-    }
+    if (!best || bestScore === 0) return 'no-match:score0';
+
+    // The cartStepper is a <span> INSIDE a <button>. We must click the <button>,
+    // not the span — clicking inner elements can miss React's event handlers.
+    var stepperSpan = best.querySelector('[data-testid="cartStepper"]');
+    var stepperBtn = stepperSpan
+      ? (stepperSpan.closest('button') || stepperSpan.parentElement)
+      : best.querySelector('button');
     if (!stepperBtn) return 'no-stepper';
     stepperBtn.click();
-    return 'ok';
+    return 'ok:' + stepperBtn.tagName;
   }, itemName);
 }
 
@@ -384,27 +386,42 @@ async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
   }
 
   await page.keyboard.press('Escape');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
 
   var stepResult = await clickStepperForItem(page, itemName);
   console.log('  [stepper] ' + itemName + ' → ' + stepResult);
-  if (stepResult !== 'ok') return false;
+  if (!stepResult.startsWith('ok')) return false;
 
-  // Wait for product detail page (has unit/case quantity buttons)
+  // Wait for the product detail page which has unit/case stepper buttons.
+  // Poll up to 12 seconds.
   var productPageOpen = false;
-  for (var w = 0; w < 20; w++) {
+  var foundBtns = '';
+  for (var w = 0; w < 30; w++) {
     await page.waitForTimeout(400);
-    productPageOpen = await page.evaluate(function() {
-      return Array.from(document.querySelectorAll('button')).some(function(b) {
-        var l = (b.getAttribute('aria-label') || '').toLowerCase();
-        return l.includes('increment unit') || l.includes('decrement unit') ||
-               l.includes('increment case') || l.includes('decrement case') ||
-               l.includes('increment single') || l.includes('decrement single');
+    var pageState = await page.evaluate(function() {
+      var btns = Array.from(document.querySelectorAll('button'));
+      var labels = btns.map(function(b) { return b.getAttribute('aria-label') || ''; })
+                       .filter(function(l) { return l.length > 0; });
+      var hasIncrement = labels.some(function(l) {
+        var ll = l.toLowerCase();
+        return ll.includes('increment unit') || ll.includes('decrement unit') ||
+               ll.includes('increment case') || ll.includes('decrement case') ||
+               ll.includes('increment single') || ll.includes('decrement single');
       });
+      // Also check for Back button — confirms product page is open
+      var hasBack = Array.from(document.querySelectorAll('button, a')).some(function(b) {
+        return (b.textContent || '').trim().toLowerCase() === 'back';
+      });
+      return { hasIncrement: hasIncrement, hasBack: hasBack, labels: labels.slice(0, 8).join(' | ') };
     });
-    if (productPageOpen) break;
+    if (pageState.hasIncrement || pageState.hasBack) {
+      productPageOpen = true;
+      foundBtns = pageState.labels;
+      break;
+    }
   }
 
+  console.log('  [product page] open=' + productPageOpen + ' btns: ' + foundBtns);
   if (!productPageOpen) {
     console.log('  WARNING: product page never opened for ' + itemName);
     await page.keyboard.press('Escape');
@@ -418,25 +435,30 @@ async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
   for (var i = 0; i < clicks; i++) {
     var result = await page.evaluate(function(dir) {
       var btns = Array.from(document.querySelectorAll('button'));
+      // Primary: aria-label contains direction + "unit" or "single"
       var btn = btns.find(function(b) {
         var l = (b.getAttribute('aria-label') || '').toLowerCase();
         return l.includes(dir + ' unit') || l.includes(dir + ' single');
       });
-      // Fallback: plain + or - symbol button
+      // Fallback: plain +/- text
       if (!btn) {
         var sym = dir === 'increment' ? '+' : '-';
         btn = btns.find(function(b) { return b.textContent.trim() === sym; });
       }
-      if (btn) { btn.click(); return btn.getAttribute('aria-label') || btn.textContent.trim(); }
-      return 'no-btn';
+      if (btn) { btn.click(); return (btn.getAttribute('aria-label') || btn.textContent.trim()); }
+      // Last resort: log all available button labels so we can debug
+      var allLabels = btns.map(function(b) {
+        return (b.getAttribute('aria-label') || b.textContent.trim().slice(0, 20));
+      }).filter(Boolean).join(' | ');
+      return 'no-btn. Available: ' + allLabels.slice(0, 200);
     }, direction);
     console.log('    [' + (i + 1) + '/' + clicks + '] ' + result);
-    if (result === 'no-btn') { console.log('  WARNING: no ' + direction + ' button'); break; }
-    await page.waitForTimeout(500);
+    if (result.startsWith('no-btn')) { console.log('  WARNING: increment btn not found'); break; }
+    await page.waitForTimeout(600);
   }
 
   // Click Back to return to the cart drawer
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
   var backResult = await page.evaluate(function() {
     var btns = Array.from(document.querySelectorAll('button, a'));
     var back = btns.find(function(b) {
@@ -444,12 +466,16 @@ async function adjustCartItemQty(page, itemName, currentQty, targetQty) {
       var lbl = (b.getAttribute('aria-label') || '').toLowerCase();
       return txt === 'back' || lbl === 'back' || lbl.includes('go back');
     });
-    if (back) { back.click(); return 'ok'; }
-    return 'no-back';
+    if (back) { back.click(); return 'ok:' + (back.textContent || '').trim(); }
+    // Log what buttons exist so we can find the back button
+    var available = Array.from(document.querySelectorAll('button, a'))
+      .map(function(b) { return (b.textContent || '').trim().slice(0, 20); })
+      .filter(Boolean).slice(0, 10).join(' | ');
+    return 'no-back. Available: ' + available;
   });
   console.log('  [back] ' + backResult);
-  if (backResult !== 'ok') await page.keyboard.press('Escape');
-  await page.waitForTimeout(800);
+  if (!backResult.startsWith('ok')) await page.keyboard.press('Escape');
+  await page.waitForTimeout(1000);
   return true;
 }
 
