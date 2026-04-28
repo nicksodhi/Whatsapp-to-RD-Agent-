@@ -248,9 +248,12 @@ async function placeOrder(orderItems) {
     console.log('Bulk add clicked');
 
     // ── CONFIRM THE "ADD 54 ITEMS?" MODAL ───────────────────────────────────
-    const confirmBtn = page.locator('[data-testid="PromptModalConfirmButton"]');
-    await confirmBtn.waitFor({ timeout: 15000 });
-    await confirmBtn.click();
+    // Scope to the "Add 54 items to cart?" dialog specifically —
+    // multiple PromptModalConfirmButton elements exist on the page.
+    const confirmBtn = page.locator('[aria-label="Add 54 items to cart?"] [data-testid="PromptModalConfirmButton"]')
+      .or(page.locator('[data-testid="PromptModalConfirmButton"]').first());
+    await confirmBtn.first().waitFor({ timeout: 15000 });
+    await confirmBtn.first().click();
     console.log('Bulk add confirmed');
     await page.waitForTimeout(4000);
 
