@@ -43,8 +43,7 @@ const ITEM_MAP = {
   'frozen spinach':'Frozen James Farm - Frozen Chopped Spinach - 3 lbs',
   'frozen peas':'Frozen James Farm - IQF Peas - 2.5 lbs',
   'frozen broccoli':'Frozen James Farm - IQF Broccoli Florets - 2 lbs',
-  'frozen 4-way mix':'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
-  '4-way mix':'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
+  'frozen 4-way mix':'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs','4-way mix':'Frozen James Farm - IQF Mixed Vegetables - 2.5 lbs',
   'roti atta':'Golden Temple - Durum Atta Flour - 2/20 lb Bag','atta':'Golden Temple - Durum Atta Flour - 2/20 lb Bag',
   'all purpose flour':"Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
   'flour':"Chef's Quality - Hotel & Restaurant All Purpose Flour - 25 lb Bag",
@@ -58,105 +57,114 @@ const ITEM_MAP = {
   'cooking oil':"Chef's Quality - Soybean Salad Oil - 35 lbs",
   'fryer oil':"Chef's Quality - Clear Liquid Fry Oil, zero trans fats - 35 lbs",
   'canola oil':"Chef's Quality - 100% Canola Salad Oil - 35 lbs",
-  'sambal':'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
-  'sambal chili':'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
+  'sambal':'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz','sambal chili':'Huy Fong - Sambal Olek (Ground Chili Paste) - 3/136 oz',
   'lemon juice':"Chef's Quality - Lemon Juice - gallon",'red food color':'Felbro - Red Food Coloring - gallon',
   'water':'Evian - Natural Spring Water, 24 Ct, 500 mL','sprite':'Sprite Bottles, 16.9 fl oz, 4 Pack',
   'diet coke':'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
 };
 
-async function parseOrder(message) {
-  const itemMapStr = Object.entries(ITEM_MAP).map(([k,v])=>`"${k}" -> "${v}"`).join('\n');
+async function parseOrder(msg) {
+  const map = Object.entries(ITEM_MAP).map(([k,v])=>`"${k}" -> "${v}"`).join('\n');
   try {
     const res = await anthropic.messages.create({ model:'claude-haiku-4-5-20251001', max_tokens:1000,
-      messages:[{role:'user',content:'Ordering assistant for Naan & Curry.\n\nItem mapping:\n'+itemMapStr+
-        '\n\nRules: IGNORE headers/dates/names. ONLY items with quantity. EXACT quantity. Return ONLY valid JSON array.\n\n'+
-        'Format: [{"item":"exact name from map values","quantity":NUMBER}]\n\nOrder: '+message}]});
-    const text=res.content[0].text; const match=text.match(/\[[\s\S]*\]/);
-    return JSON.parse(match?match[0]:text);
-  } catch(e){console.error('parseOrder:',e.message);return{error:true};}
+      messages:[{role:'user',content:'Ordering assistant for Naan & Curry.\n\nMapping:\n'+map+
+        '\n\nRules: IGNORE headers/dates/names. ONLY items with qty. EXACT qty. Return ONLY valid JSON array.\n'+
+        'Format: [{"item":"exact name from map values","quantity":NUMBER}]\n\nOrder: '+msg}]});
+    const t = res.content[0].text, m = t.match(/\[[\s\S]*\]/);
+    return JSON.parse(m?m[0]:t);
+  } catch(e) { console.error('parse:',e.message); return {error:true}; }
 }
 
-async function sendWhatsApp(to,body) {
-  const chunks=body.match(/[\s\S]{1,1400}/g)||[body];
-  for(let i=0;i<chunks.length;i++){
+async function sendWhatsApp(to, body) {
+  const chunks = body.match(/[\s\S]{1,1400}/g)||[body];
+  for (let i=0;i<chunks.length;i++) {
     await twilioClient.messages.create({from:'whatsapp:'+process.env.TWILIO_WHATSAPP_NUMBER,to:'whatsapp:'+to,body:chunks[i]});
-    if(chunks.length>1)await new Promise(r=>setTimeout(r,1000));
+    if (chunks.length>1) await new Promise(r=>setTimeout(r,1000));
   }
 }
 
-async function sendEmail(orderItems,sender) {
-  const lines=orderItems.map(i=>`* ${i.quantity}x ${i.item}`).join('\n');
+async function sendEmail(items, sender) {
   await sgMail.send({from:'nicksodhi@gmail.com',to:'nicksodhi@gmail.com',
-    subject:'Restaurant Depot Cart Updated - '+new Date().toLocaleDateString(),
-    text:`Order by ${sender}:\n\n${lines}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`});
+    subject:'RD Cart Updated '+new Date().toLocaleDateString(),
+    text:`Order by ${sender}:\n\n${items.map(i=>`* ${i.quantity}x ${i.item}`).join('\n')}\n\nhttps://member.restaurantdepot.com/store/business/cart`});
 }
 
-function scoreMatch(text,itemName) {
+function score(text, name) {
   const t=text.toLowerCase();
-  const words=itemName.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(w=>w.length>=3&&!['lbs','pkg','and','the','for','all','out','can','dry'].includes(w));
-  const priority=words.filter(w=>w.length>=6);
-  let score=words.filter(w=>t.includes(w)).length;
-  priority.forEach(w=>{if(t.includes(w))score+=3;});
-  return score;
+  const words=name.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ').filter(w=>w.length>=3&&!['lbs','pkg','and','the','for','all','out','can','dry'].includes(w));
+  const pri=words.filter(w=>w.length>=6);
+  let s=words.filter(w=>t.includes(w)).length;
+  pri.forEach(w=>{if(t.includes(w))s+=3;});
+  return s;
 }
 
 async function placeOrder(orderItems) {
   const targetMap={};
   orderItems.forEach(oi=>{
-    const isSingle=SINGLE_ONLY_ITEMS.includes(oi.item);
-    const caseSize=CASE_SIZES[oi.item]||1;
-    const targetQty=isSingle?oi.quantity:oi.quantity*caseSize;
-    targetMap[oi.item]={ordered:oi,targetQty,found:false};
-    console.log(`Target | ${oi.item}: ordered=${oi.quantity} case=${caseSize} cartQty=${targetQty}`);
+    const single=SINGLE_ONLY_ITEMS.includes(oi.item);
+    const cs=CASE_SIZES[oi.item]||1;
+    const tq=single?oi.quantity:oi.quantity*cs;
+    targetMap[oi.item]={targetQty:tq,found:false};
+    console.log(`Target | ${oi.item}: ${oi.quantity} × ${cs} = ${tq}`);
   });
 
-  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-setuid-sandbox']});
-  const context=await browser.newContext({userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'});
-  const page=await context.newPage();
+  const browser = await chromium.launch({headless:true,args:['--no-sandbox','--disable-setuid-sandbox']});
+  const ctx = await browser.newContext({userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'});
+  const page = await ctx.newPage();
 
-  // ── NETWORK INTERCEPTION ─────────────────────────────────────────────────
-  let cartId=null;
-  // Collect ALL graphql responses that look like cart data
-  const gqlResponses=[];
-  
-  page.on('request',req=>{
-    if(!req.url().includes('/graphql'))return;
-    try{
-      // Capture cartId from GET query params
-      const url=new URL(req.url());
-      const vars=JSON.parse(url.searchParams.get('variables')||'{}');
-      if(vars.cartId&&!cartId){cartId=vars.cartId;console.log('cartId:',cartId);}
-      // Capture cartId from POST body
-      if(req.method()==='POST'){
-        const body=JSON.parse(req.postData()||'{}');
-        const v=body.variables||{};
-        if(v.cartId&&!cartId){cartId=v.cartId;console.log('cartId POST:',cartId);}
-        if(v.input?.cartId&&!cartId){cartId=v.input.cartId;console.log('cartId input:',cartId);}
-      }
-    }catch(e){}
-  });
+  // Capture key network data
+  let cartId = null;
+  let updateMutationHash = null;
+  let updateMutationVarStructure = null; // to learn the variable schema
+  const capturedResponses = {}; // op → parsed response body
 
-  page.on('response',async res=>{
-    if(!res.url().includes('/graphql'))return;
-    try{
-      const url=new URL(res.url());
-      const op=url.searchParams.get('operationName')||(res.request().method()==='POST'?JSON.parse(res.request().postData()||'{}').operationName:'');
-      const text=await res.text();
-      // Store all substantial responses
-      if(text.length>200){
-        gqlResponses.push({op,text,url:res.url().slice(0,100)});
-        // Log any response mentioning cart items
-        if(text.includes('"quantity"')&&(text.includes('"id"'))&&text.length>500){
-          console.log(`GQL [${op}] len=${text.length}: ${text.slice(0,300)}`);
+  page.on('request', req => {
+    try {
+      if (req.method()==='POST' && req.url().includes('/graphql')) {
+        const b = JSON.parse(req.postData()||'{}');
+        const vars = b.variables||{};
+        // Capture cartId
+        if (vars.cartId && !cartId) { cartId = vars.cartId; console.log('cartId=',cartId); }
+        if (vars.input?.cartId && !cartId) { cartId = vars.input.cartId; }
+        // Capture UpdateCartItemsMutation hash and variable structure
+        if (b.operationName === 'UpdateCartItemsMutation') {
+          updateMutationHash = b.extensions?.persistedQuery?.sha256Hash;
+          updateMutationVarStructure = JSON.stringify(vars).slice(0, 1000);
+          console.log('UpdateCartItemsMutation hash=', updateMutationHash);
+          console.log('UpdateCartItemsMutation vars=', updateMutationVarStructure);
         }
       }
-    }catch(e){}
+      if (req.method()==='GET' && req.url().includes('/graphql')) {
+        const url = new URL(req.url());
+        const vars = JSON.parse(url.searchParams.get('variables')||'{}');
+        if (vars.cartId && !cartId) { cartId = vars.cartId; console.log('cartId GET=',cartId); }
+      }
+    } catch(e) {}
+  });
+
+  page.on('response', async res => {
+    if (!res.url().includes('/graphql')) return;
+    try {
+      const url = new URL(res.url());
+      const reqBody = res.request().method()==='POST' ? JSON.parse(res.request().postData()||'{}') : {};
+      const op = reqBody.operationName || url.searchParams.get('operationName') || '';
+      if (!op) return;
+      const text = await res.text();
+      if (text.length < 100) return;
+      const data = JSON.parse(text);
+      // Store key responses
+      if (['UpdateCartItemsMutation','Items','UniversalReplacements'].includes(op)) {
+        if (!capturedResponses[op]) capturedResponses[op] = [];
+        capturedResponses[op].push(data);
+        console.log(`Captured ${op} (${text.length} bytes)`);
+      }
+    } catch(e) {}
   });
 
   try {
-    // ── LOGIN ───────────────────────────────────────────────────────────────
-    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F',{waitUntil:'domcontentloaded',timeout:30000});
+    // LOGIN
+    await page.goto('https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F',
+      {waitUntil:'domcontentloaded',timeout:30000});
     await page.waitForTimeout(5000);
     await page.locator('#email').fill(process.env.RD_EMAIL);
     await page.locator('input[type="password"]').fill(process.env.RD_PASSWORD);
@@ -164,311 +172,359 @@ async function placeOrder(orderItems) {
     await page.waitForTimeout(6000);
     console.log('Logged in');
 
-    // ── CLEAR CART via UI ────────────────────────────────────────────────────
+    // CLEAR CART
     await page.goto('https://member.restaurantdepot.com/store/business/cart',{waitUntil:'domcontentloaded',timeout:30000});
     await page.waitForTimeout(3000);
     let removed=0;
     for(let i=0;i<80;i++){
-      const btn=await page.evaluate(()=>{
-        const els=Array.from(document.querySelectorAll('button,a'));
-        const b=els.find(b=>{
-          const txt=(b.textContent||'').trim().toLowerCase();
-          const aria=(b.getAttribute('aria-label')||'').toLowerCase();
-          if(aria.includes('wishlist')||aria.includes('saved'))return false;
-          return txt==='remove'||aria.includes('remove');
+      const ok=await page.evaluate(()=>{
+        const btn=Array.from(document.querySelectorAll('button,a')).find(b=>{
+          const t=(b.textContent||'').trim().toLowerCase();
+          const a=(b.getAttribute('aria-label')||'').toLowerCase();
+          return (t==='remove'||a.includes('remove'))&&!a.includes('wishlist');
         });
-        if(b){b.click();return true;}return false;
+        if(btn){btn.click();return true;} return false;
       });
-      if(!btn)break;
+      if(!ok)break;
       await page.waitForTimeout(1200);
       removed++;
     }
-    console.log(`Cart cleared (${removed} items removed)`);
+    console.log(`Cart cleared: ${removed} items`);
 
-    // ── LOAD ORDER GUIDE ─────────────────────────────────────────────────────
-    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',{waitUntil:'load',timeout:45000});
+    // ORDER GUIDE
+    await page.goto('https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',
+      {waitUntil:'load',timeout:45000});
     await page.waitForTimeout(5000);
     console.log('Order guide loaded, cartId=',cartId);
 
-    // ── BULK ADD ─────────────────────────────────────────────────────────────
+    // BULK ADD
     let bulkClicked=false;
-    for(let attempt=0;attempt<20;attempt++){
-      const clicked=await page.evaluate(()=>{
-        // Try data-testid first
-        let btn=document.querySelector('[data-testid="add-all-items-button"]');
-        if(!btn){
-          // Fallback: find by text
-          btn=Array.from(document.querySelectorAll('button')).find(b=>{
-            const m=(b.textContent||'').trim().match(/add\s+(\d+)\s+items?\s+to\s+cart/i);
-            return m&&parseInt(m[1])>=10;
-          });
-        }
-        if(btn){btn.click();return (btn.textContent||'').trim();}
-        return null;
+    for(let i=0;i<20;i++){
+      bulkClicked=await page.evaluate(()=>{
+        const btn=document.querySelector('[data-testid="add-all-items-button"]')
+          || Array.from(document.querySelectorAll('button')).find(b=>/add\s+\d+\s+items?\s+to\s+cart/i.test(b.textContent||''));
+        if(btn){btn.click();return true;} return false;
       });
-      if(clicked){console.log('Bulk add clicked:',clicked);bulkClicked=true;break;}
+      if(bulkClicked){console.log('Bulk add clicked');break;}
       await page.waitForTimeout(1500);
     }
-    if(!bulkClicked)throw new Error('Bulk add button not found');
 
-    // ── CONFIRM MODAL via page.evaluate (proven to work) ────────────────────
-    // Do NOT use Playwright locator for this — the button is hidden/in a portal
-    // page.evaluate with document.querySelector reliably finds and clicks it
+    // CONFIRM — page.evaluate click (proven reliable, avoids hidden-element issues)
     let confirmed=false;
-    for(let attempt=0;attempt<20;attempt++){
-      await page.waitForTimeout(700);
+    for(let i=0;i<25;i++){
+      await page.waitForTimeout(600);
       confirmed=await page.evaluate(()=>{
-        // Try testid first
-        const btn=document.querySelector('[data-testid="PromptModalConfirmButton"]');
-        if(btn){
-          // Check it's the "Yes, continue" button (not delete guide)
-          const dialog=btn.closest('[role="dialog"],[data-dialog-ref]');
-          const dialogText=(dialog||document.body).textContent||'';
-          if(dialogText.includes('items to cart')||dialogText.includes('Yes, continue')||!dialogText.includes('Delete')){
-            btn.click();return true;
+        // Primary: PromptModalConfirmButton that's inside "add items" dialog
+        const btns=Array.from(document.querySelectorAll('[data-testid="PromptModalConfirmButton"]'));
+        for(const btn of btns){
+          const dialog=btn.closest('[role="dialog"],[data-dialog-ref],[aria-label]');
+          const txt=((dialog||btn.parentElement||document.body).textContent||'').toLowerCase();
+          if(!txt.includes('delete')&&(txt.includes('items to cart')||txt.includes('yes')||txt.includes('continue'))){
+            btn.click(); return 'confirmed-testid';
           }
         }
-        // Fallback: click "Yes, continue" text button
-        const allBtns=Array.from(document.querySelectorAll('button'));
-        const yesBtn=allBtns.find(b=>/yes,?\s*continue/i.test(b.textContent));
-        if(yesBtn){yesBtn.click();return true;}
+        // Fallback: "Yes, continue" button
+        const yes=Array.from(document.querySelectorAll('button')).find(b=>/yes.{0,5}continue/i.test(b.textContent||''));
+        if(yes){yes.click();return 'confirmed-yes';}
         return false;
       });
-      if(confirmed){console.log('Bulk add confirmed');break;}
+      if(confirmed){console.log('Confirmed:',confirmed);break;}
     }
-    if(!confirmed)console.log('WARNING: Confirm may not have fired — continuing anyway');
+    if(!confirmed) console.log('WARNING: confirm may not have fired');
 
-    await page.waitForTimeout(6000);
-    console.log('After bulk add, cartId=',cartId);
+    await page.waitForTimeout(7000); // wait for UpdateCartItemsMutation response
+    console.log('Post-bulk: cartId=',cartId,'hash=',updateMutationHash,'varStructure=',updateMutationVarStructure);
 
-    // ── OPEN CART DRAWER ─────────────────────────────────────────────────────
-    const drawerOpened=await page.evaluate(()=>{
-      const btns=Array.from(document.querySelectorAll('button'));
-      const cartBtn=btns.find(b=>{
+    // OPEN CART DRAWER
+    await page.evaluate(()=>{
+      const btn=Array.from(document.querySelectorAll('button')).find(b=>{
         const l=(b.getAttribute('aria-label')||'').toLowerCase();
         return l.includes('view cart')||l.includes('items in cart')||l.includes('cart.');
       });
-      if(cartBtn){cartBtn.click();return true;}
-      return false;
+      if(btn)btn.click();
     });
-    console.log('Cart drawer opened:',drawerOpened);
     await page.waitForTimeout(5000);
+    console.log('Cart drawer opened');
 
-    // ── READ CART ITEMS FROM DOM ─────────────────────────────────────────────
-    // Apollo cache approach failed — items aren't typed the way we expected.
-    // Read directly from the rendered cart drawer DOM instead.
-    const domCartItems=await page.evaluate(()=>{
+    // ── BUILD NAME → CART ITEM ID MAP ────────────────────────────────────────
+    // Use UpdateCartItemsMutation response (has cart item IDs)
+    // Cross-reference with Items response (has product names)
+    // and UniversalReplacements (has productId → cartItemId)
+
+    // Step 1: Extract all cart items with IDs from UpdateCartItemsMutation response
+    let allCartItems=[]; // {id, quantity, productId?}
+    const updateResp = capturedResponses['UpdateCartItemsMutation']||[];
+    for (const resp of updateResp) {
+      try {
+        const items = resp?.data?.updateCartItems?.cart?.cartItemCollection?.cartItems||[];
+        console.log(`UpdateCartItemsMutation has ${items.length} cart items`);
+        items.forEach(item=>{
+          allCartItems.push({
+            cartItemId: String(item.id),
+            quantity: item.quantity,
+            productId: item.productId||item.product?.id||null,
+            itemId: item.itemId||null,
+            legacyId: item.legacyId||null,
+          });
+        });
+      } catch(e) { console.log('Parse UpdateCartItemsMutation err:',e.message); }
+    }
+    console.log(`Total cart items from GQL: ${allCartItems.length}`);
+
+    // Step 2: Build productId → name map from Items query
+    const productIdToName={};
+    const itemsResp = capturedResponses['Items']||[];
+    for (const resp of itemsResp) {
+      try {
+        const items = resp?.data?.items||[];
+        items.forEach(item=>{
+          const pid = String(item.productId||'');
+          if(pid) productIdToName[pid]=item.name||'';
+        });
+      } catch(e) {}
+    }
+    console.log(`Product name map size: ${Object.keys(productIdToName).length}`);
+
+    // Step 3: Build productId → cartItemId from UniversalReplacements
+    const productIdToCartItemId={};
+    const replResp = capturedResponses['UniversalReplacements']||[];
+    for (const resp of replResp) {
+      try {
+        const sels = resp?.data?.replacementSelections||[];
+        sels.forEach(sel=>{
+          const ref = sel?.basketItemReference;
+          if(ref?.productId && ref?.basketItemReferenceId){
+            productIdToCartItemId[String(ref.productId)] = String(ref.basketItemReferenceId);
+          }
+        });
+      } catch(e) {}
+    }
+    console.log(`ProductId→CartItemId map size: ${Object.keys(productIdToCartItemId).length}`);
+
+    // Step 4: Build cartItemId → name map
+    const cartItemIdToName={};
+    // Via productId chain
+    Object.entries(productIdToCartItemId).forEach(([pid, cid])=>{
+      const name = productIdToName[pid];
+      if(name) cartItemIdToName[cid]=name;
+    });
+    // Also try from allCartItems direct productId
+    allCartItems.forEach(ci=>{
+      if(ci.productId && productIdToName[String(ci.productId)]){
+        cartItemIdToName[ci.cartItemId] = productIdToName[String(ci.productId)];
+      }
+    });
+    console.log(`CartItemId→Name map size: ${Object.keys(cartItemIdToName).length}`);
+    Object.entries(cartItemIdToName).slice(0,5).forEach(([cid,name])=>console.log(`  ${cid} → ${name}`));
+
+    // Step 5: Also read DOM for name→cartItemId via matching
+    const domGroups=await page.evaluate(()=>{
       const groups=Array.from(document.querySelectorAll('[aria-label="product"][role="group"]'));
-      return groups.map((g,idx)=>{
-        // Qty from cartStepper
+      return groups.map(g=>{
         const stepper=g.querySelector('[data-testid="cartStepper"]');
         const qty=stepper?parseInt((stepper.textContent||'').match(/(\d+)/)?.[1]||'1'):1;
-        // Name — longest text that's not a price/label
-        const allText=Array.from(g.querySelectorAll('span,p,div,a'))
+        const lines=Array.from(g.querySelectorAll('span,p,div,a'))
           .filter(el=>el.children.length<=2)
           .map(el=>(el.textContent||'').trim())
-          .filter(t=>t.length>5&&t.length<150&&!/^\$/.test(t)&&!/^(remove|replace|likely|many|about|quantity|change)/i.test(t)&&!/\d+\.?\d*\s*(lb|oz|ct|gal|#|z)\s*$/i.test(t));
-        const name=allText.reduce((a,b)=>a.length>=b.length?a:b,'');
-        return{idx,qty,name};
+          .filter(t=>t.length>5&&t.length<150&&!/^\$/.test(t)&&!/^(remove|replace|likely|many|about|quantity|change)/i.test(t));
+        const name=lines.reduce((a,b)=>a.length>=b.length?a:b,'');
+        return{name,qty};
       });
     });
-    console.log(`DOM cart items: ${domCartItems.length}`);
-    domCartItems.forEach(i=>console.log(`  [${i.idx}] "${i.name}" qty=${i.qty}`));
+    console.log(`DOM groups: ${domGroups.length}`);
 
-    // ── GET CART ITEM IDs FROM GRAPHQL RESPONSES ─────────────────────────────
-    // Parse all captured GQL responses to find cart item IDs
-    let cartItemsWithIds=[];
-    for(const resp of gqlResponses){
-      if(resp.text.length<200)continue;
-      try{
-        const data=JSON.parse(resp.text);
-        const str=JSON.stringify(data);
-        // Look for arrays of items with id and quantity
-        if(!str.includes('"quantity"'))continue;
-        
-        // Walk the data tree to find cart items
-        function findCartItems(obj,path=''){
-          if(!obj||typeof obj!=='object')return[];
-          const results=[];
-          if(Array.isArray(obj)){
-            obj.forEach((item,i)=>{
-              if(item&&typeof item==='object'&&'id'in item&&'quantity'in item&&typeof item.quantity==='number'){
-                results.push({id:String(item.id),quantity:item.quantity,data:item,source:resp.op,path:path+'['+i+']'});
-              }
-              results.push(...findCartItems(item,path+'['+i+']'));
-            });
-          }else{
-            Object.entries(obj).forEach(([k,v])=>{
-              if(v&&typeof v==='object'&&'id'in v&&'quantity'in v&&typeof v.quantity==='number'&&v.quantity>=0){
-                results.push({id:String(v.id),quantity:v.quantity,data:v,source:resp.op,path:path+'.'+k});
-              }
-              results.push(...findCartItems(v,path+'.'+k));
-            });
-          }
-          return results;
-        }
-        
-        const found=findCartItems(data);
-        if(found.length>0){
-          console.log(`Found ${found.length} potential cart items in [${resp.op}]`);
-          found.slice(0,5).forEach(f=>console.log(`  id=${f.id} qty=${f.quantity} path=${f.path}`));
-          cartItemsWithIds.push(...found);
-        }
-      }catch(e){}
-    }
+    // ── MATCH ORDERED ITEMS TO CART ITEM IDs ─────────────────────────────────
+    // Match each ordered item to a cart item ID
+    const actions=[]; // {cartItemId, name, currentQty, targetQty, action:'update'|'remove'|'skip'}
 
-    // Deduplicate by id
-    const seen=new Set();
-    cartItemsWithIds=cartItemsWithIds.filter(item=>{
-      if(seen.has(item.id))return false;
-      seen.add(item.id);return true;
-    });
-    console.log(`Unique cart item IDs found: ${cartItemsWithIds.length}`);
+    // First: process items we have IDs for
+    const usedCartItemIds=new Set();
 
-    // ── MATCH DOM ITEMS TO ORDERED ITEMS ────────────────────────────────────
-    // Use DOM for names/quantities, GQL responses for IDs
-    const matchedItems=[];
-    domCartItems.forEach((domItem,domIdx)=>{
-      // Find best matching ordered item
-      let bestKey=null,bestScore=0;
+    // For each cart item with a known name, try to match to ordered items
+    allCartItems.forEach(ci=>{
+      const ciName = cartItemIdToName[ci.cartItemId]||'';
+      if(!ciName) return; // will handle via DOM fallback
+
+      let bestKey=null,bestS=0;
       for(const key of Object.keys(targetMap)){
-        const s=scoreMatch(domItem.name,key);
-        if(s>bestScore){bestScore=s;bestKey=key;}
+        const s=score(ciName,key);
+        if(s>bestS){bestS=s;bestKey=key;}
       }
-      // Find matching ID from GQL responses (by index or quantity match)
-      const gqlItem=cartItemsWithIds[domIdx]||null;
-      matchedItems.push({
-        domIdx,name:domItem.name,currentQty:domItem.qty,
-        orderedKey:bestKey,orderedScore:bestScore,
-        id:gqlItem?.id||null,
-        targetQty:bestKey?targetMap[bestKey].targetQty:null,
-      });
-      if(bestKey)targetMap[bestKey].found=true;
+
+      usedCartItemIds.add(ci.cartItemId);
+      if(!bestKey||bestS===0){
+        actions.push({cartItemId:ci.cartItemId,name:ciName,currentQty:ci.quantity,targetQty:0,action:'remove'});
+      } else {
+        targetMap[bestKey].found=true;
+        const tq=targetMap[bestKey].targetQty;
+        if(ci.quantity===tq){
+          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
+        } else {
+          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
+        }
+      }
     });
 
-    // ── UPDATE QUANTITIES + REMOVE via browser fetch ─────────────────────────
-    const updateResult=await page.evaluate(async(params)=>{
-      const{matchedItems,cartId,targetMap}=params;
-      const results=[];
-
-      async function gqlFetch(op,query,vars){
-        const r=await fetch('/graphql',{method:'POST',
-          headers:{'content-type':'application/json','accept':'application/json'},
-          credentials:'include',
-          body:JSON.stringify({operationName:op,query,variables:vars})});
-        return r.json();
+    // For cart items without names, try DOM matching
+    const unmatchedCartItems=allCartItems.filter(ci=>!usedCartItemIds.has(ci.cartItemId));
+    domGroups.forEach((dom,idx)=>{
+      if(idx>=unmatchedCartItems.length)return;
+      const ci=unmatchedCartItems[idx];
+      let bestKey=null,bestS=0;
+      for(const key of Object.keys(targetMap)){
+        const s=score(dom.name,key);
+        if(s>bestS){bestS=s;bestKey=key;}
       }
-
-      // Try all known mutation structures for update
-      async function tryUpdate(id,qty,cartId){
-        const mutations=[
-          ['UpdateItemsInCart',`mutation UpdateItemsInCart($input:UpdateItemsInCartInput!){updateItemsInCart(input:$input){__typename}}`,{input:{cartId,updates:[{cartItemId:id,quantity:qty}]}}],
-          ['UpdateCartItemQuantity',`mutation UpdateCartItemQuantity($input:UpdateCartItemQuantityInput!){updateCartItemQuantity(input:$input){__typename}}`,{input:{cartItemId:id,quantity:qty}}],
-          ['UpdateCartItem',`mutation UpdateCartItem($input:UpdateCartItemInput!){updateCartItem(input:$input){__typename}}`,{input:{cartItemId:id,quantity:qty}}],
-          ['ChangeItemQuantity',`mutation ChangeItemQuantity($input:ChangeItemQuantityInput!){changeItemQuantity(input:$input){__typename}}`,{input:{id,quantity:qty,cartId}}],
-          ['SetItemQuantity',`mutation SetItemQuantity($cartItemId:ID!,$quantity:Int!){setItemQuantity(cartItemId:$cartItemId,quantity:$quantity){__typename}}`,{cartItemId:id,quantity:qty}],
-          // Try with cartId at top level
-          ['UpdateItemsInCart',`mutation UpdateItemsInCart($cartId:ID!,$updates:[CartItemUpdateInput!]!){updateItemsInCart(cartId:$cartId,updates:$updates){__typename}}`,{cartId,updates:[{cartItemId:id,quantity:qty}]}],
-        ];
-        for(const[op,query,vars]of mutations){
-          const d=await gqlFetch(op,query,vars);
-          if(!d.errors)return{ok:true,op};
-          const msg=(d.errors[0]?.message||'').toLowerCase();
-          // If it's a field/type error, wrong mutation — try next
-          if(msg.includes('cannot query field')||msg.includes('unknown type')||msg.includes('does not exist'))continue;
-          // If it's a permissions or auth error, report it
-          return{ok:false,op,err:d.errors[0]?.message};
+      usedCartItemIds.add(ci.cartItemId);
+      if(!bestKey||bestS===0){
+        actions.push({cartItemId:ci.cartItemId,name:dom.name,currentQty:ci.quantity,targetQty:0,action:'remove'});
+      } else {
+        targetMap[bestKey].found=true;
+        const tq=targetMap[bestKey].targetQty;
+        if(ci.quantity===tq){
+          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
+        } else {
+          actions.push({cartItemId:ci.cartItemId,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
         }
-        return{ok:false,err:'all mutations failed'};
       }
+    });
 
-      async function tryRemove(id,cartId){
-        const mutations=[
-          ['RemoveItemsFromCart',`mutation RemoveItemsFromCart($input:RemoveItemsFromCartInput!){removeItemsFromCart(input:$input){__typename}}`,{input:{cartId,cartItemIds:[id]}}],
-          ['RemoveCartItem',`mutation RemoveCartItem($input:RemoveCartItemInput!){removeCartItem(input:$input){__typename}}`,{input:{cartItemId:id}}],
-          ['DeleteCartItem',`mutation DeleteCartItem($input:DeleteCartItemInput!){deleteCartItem(input:$input){__typename}}`,{input:{cartItemId:id}}],
-          ['RemoveItemFromCart',`mutation RemoveItemFromCart($cartId:ID!,$itemId:ID!){removeItemFromCart(cartId:$cartId,itemId:$itemId){__typename}}`,{cartId,itemId:id}],
-        ];
-        for(const[op,query,vars]of mutations){
-          const d=await gqlFetch(op,query,vars);
-          if(!d.errors)return{ok:true,op};
-          const msg=(d.errors[0]?.message||'').toLowerCase();
-          if(msg.includes('cannot query field')||msg.includes('unknown type'))continue;
-          return{ok:false,op,err:d.errors[0]?.message};
-        }
-        return{ok:false,err:'all remove mutations failed'};
-      }
+    console.log(`Actions: ${actions.length} (updates=${actions.filter(a=>a.action==='update').length} removes=${actions.filter(a=>a.action==='remove').length} skips=${actions.filter(a=>a.action==='skip').length})`);
+    actions.filter(a=>a.action==='update').forEach(a=>console.log(`  UPDATE ${a.name}: ${a.currentQty}→${a.targetQty} id=${a.cartItemId}`));
+    actions.filter(a=>a.action==='remove').forEach(a=>console.log(`  REMOVE ${a.name} id=${a.cartItemId}`));
 
-      for(const item of matchedItems){
-        if(!item.orderedKey||item.orderedScore===0){
-          // Remove item — not in order
-          if(item.id){
-            const r=await tryRemove(item.id,cartId);
-            results.push({action:'remove',name:item.name,id:item.id,...r});
-          }else{
-            results.push({action:'remove-no-id',name:item.name});
+    // ── EXECUTE ACTIONS via browser fetch ─────────────────────────────────────
+    const results = await page.evaluate(async (params) => {
+      const { actions, cartId, updateMutationHash } = params;
+      const results = [];
+
+      async function gqlFetch(op, query, vars, hash) {
+        try {
+          const body = { operationName: op, variables: vars };
+          if (hash) {
+            body.extensions = { persistedQuery: { version: 1, sha256Hash: hash } };
+          } else {
+            body.query = query;
           }
-          continue;
-        }
-
-        if(item.currentQty===item.targetQty){
-          results.push({action:'skip',name:item.orderedKey,qty:item.targetQty});
-          continue;
-        }
-
-        if(item.id){
-          const r=await tryUpdate(item.id,item.targetQty,cartId);
-          results.push({action:'update',name:item.orderedKey,from:item.currentQty,to:item.targetQty,id:item.id,...r});
-        }else{
-          results.push({action:'update-no-id',name:item.orderedKey,from:item.currentQty,to:item.targetQty});
+          const r = await fetch('/graphql', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', 'accept': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(body)
+          });
+          const text = await r.text();
+          const data = JSON.parse(text);
+          return data;
+        } catch(e) {
+          return { errors: [{ message: 'fetch error: ' + e.message }] };
         }
       }
 
-      return results;
-    },{matchedItems,cartId,targetMap:Object.fromEntries(Object.entries(targetMap).map(([k,v])=>[k,{targetQty:v.targetQty}]))});
+      // Update quantity — try UpdateCartItemsMutation first (confirmed working)
+      // then fall back to other mutations
+      async function updateQty(cartItemId, targetQty, cartId, hash) {
+        const mutations = [
+          // Use the actual captured mutation name and hash
+          ['UpdateCartItemsMutation', null, { cartId, updates: [{ cartItemId, quantity: targetQty }] }, hash],
+          ['UpdateCartItemsMutation', null, { cartId, items: [{ id: cartItemId, quantity: targetQty }] }, hash],
+          ['UpdateCartItemsMutation', null, { cartId, items: [{ cartItemId, quantity: targetQty }] }, hash],
+          // Without hash (full query)
+          ['UpdateItemsInCart', 'mutation UpdateItemsInCart($input:UpdateItemsInCartInput!){updateItemsInCart(input:$input){__typename}}', { input: { cartId, updates: [{ cartItemId, quantity: targetQty }] } }, null],
+          ['UpdateCartItem', 'mutation UpdateCartItem($input:UpdateCartItemInput!){updateCartItem(input:$input){__typename}}', { input: { cartItemId, quantity: targetQty } }, null],
+          ['UpdateCartItemQuantity', 'mutation UpdateCartItemQuantity($input:UpdateCartItemQuantityInput!){updateCartItemQuantity(input:$input){__typename}}', { input: { cartItemId, quantity: targetQty } }, null],
+        ];
+        for (const [op, query, vars, h] of mutations) {
+          const d = await gqlFetch(op, query, vars, h);
+          if (!d.errors) return { ok: true, op };
+          const msg = (d.errors[0]?.message || '').toLowerCase();
+          // Log the first real error we get (not just schema mismatches)
+          if (!msg.includes('cannot query field') && !msg.includes('unknown type') && !msg.includes('does not exist') && !msg.includes('field') && !msg.includes('type')) {
+            return { ok: false, op, err: d.errors[0]?.message };
+          }
+        }
+        // Last resort: log all errors
+        return { ok: false, err: 'all update mutations failed' };
+      }
 
+      async function removeItem(cartItemId, cartId, hash) {
+        const mutations = [
+          ['UpdateCartItemsMutation', null, { cartId, updates: [{ cartItemId, quantity: 0 }] }, hash],
+          ['UpdateCartItemsMutation', null, { cartId, items: [{ cartItemId, quantity: 0 }] }, hash],
+          ['RemoveItemsFromCart', 'mutation RemoveItemsFromCart($input:RemoveItemsFromCartInput!){removeItemsFromCart(input:$input){__typename}}', { input: { cartId, cartItemIds: [cartItemId] } }, null],
+          ['RemoveCartItem', 'mutation RemoveCartItem($input:RemoveCartItemInput!){removeCartItem(input:$input){__typename}}', { input: { cartItemId } }, null],
+          ['DeleteCartItem', 'mutation DeleteCartItem($input:DeleteCartItemInput!){deleteCartItem(input:$input){__typename}}', { input: { cartItemId } }, null],
+        ];
+        for (const [op, query, vars, h] of mutations) {
+          const d = await gqlFetch(op, query, vars, h);
+          if (!d.errors) return { ok: true, op };
+          const msg = (d.errors[0]?.message || '').toLowerCase();
+          if (!msg.includes('cannot query field') && !msg.includes('unknown type') && !msg.includes('field') && !msg.includes('type')) {
+            return { ok: false, op, err: d.errors[0]?.message };
+          }
+        }
+        return { ok: false, err: 'all remove mutations failed' };
+      }
+
+      for (const action of actions) {
+        try {
+          if (action.action === 'skip') {
+            results.push({ action: 'skip', name: action.name, qty: action.targetQty });
+          } else if (action.action === 'update') {
+            const r = await updateQty(action.cartItemId, action.targetQty, cartId, updateMutationHash);
+            results.push({ action: 'update', name: action.name, from: action.currentQty, to: action.targetQty, id: action.cartItemId, ...r });
+          } else if (action.action === 'remove') {
+            const r = await removeItem(action.cartItemId, cartId, updateMutationHash);
+            results.push({ action: 'remove', name: action.name, id: action.cartItemId, ...r });
+          }
+        } catch(e) {
+          results.push({ action: action.action, name: action.name, error: e.message });
+        }
+      }
+
+      return JSON.stringify(results);
+    }, { actions, cartId, updateMutationHash });
+
+    // Parse and log results
+    let parsedResults = [];
+    try { parsedResults = JSON.parse(results); } catch(e) { console.log('Results parse err:', e.message); }
     console.log('\n=== RESULTS ===');
-    updateResult.forEach(r=>console.log(JSON.stringify(r)));
+    parsedResults.forEach(r => console.log(JSON.stringify(r)));
 
-    const notFound=Object.entries(targetMap).filter(([k,v])=>!v.found).map(([k])=>k);
-    console.log('Not found:',notFound.join(', ')||'none');
+    const notFound = Object.entries(targetMap).filter(([k,v])=>!v.found).map(([k])=>k);
+    console.log('Not found:', notFound.join(', ')||'none');
 
     await browser.close();
-    return{success:true,notFound};
+    return { success: true, notFound };
 
-  }catch(e){
-    console.error('placeOrder error:',e.message);
-    try{await browser.close();}catch(_){}
-    return{success:false,error:e.message};
+  } catch(e) {
+    console.error('placeOrder error:', e.message);
+    try { await browser.close(); } catch(_) {}
+    return { success: false, error: e.message };
   }
 }
 
-app.post('/whatsapp',async(req,res)=>{
+// WEBHOOK
+app.post('/whatsapp', async(req,res)=>{
   res.sendStatus(200);
-  const msg=req.body.Body;
-  const from=req.body.From.replace('whatsapp:','');
+  const msg=req.body.Body, from=req.body.From.replace('whatsapp:','');
   const name=from===process.env.YOUR_WHATSAPP_NUMBER?'Nick':'Rahul';
   console.log(`From ${name}: ${msg}`);
   if(!AUTHORIZED_NUMBERS.includes(from)){await sendWhatsApp(from,'Not authorized');return;}
   await sendWhatsApp(from,`Got it ${name}! Placing order...`);
-  try{
+  try {
     const order=await parseOrder(msg);
     if(!Array.isArray(order)){await sendWhatsApp(from,'Could not parse order.');return;}
-    const summary=order.map(i=>`• ${i.quantity}x ${i.item}`).join('\n');
-    await sendWhatsApp(from,'Order:\n\n'+summary);
+    await sendWhatsApp(from,'Order:\n\n'+order.map(i=>`• ${i.quantity}x ${i.item}`).join('\n'));
     const result=await placeOrder(order);
     if(result.success){
-      let reply='Done! Review:\nmember.restaurantdepot.com/store/business/cart';
-      if(result.notFound?.length)reply+='\n\nAdd manually:\n'+result.notFound.map(n=>`• ${n}`).join('\n');
+      let reply='Done!\nmember.restaurantdepot.com/store/business/cart';
+      if(result.notFound?.length) reply+='\n\nAdd manually:\n'+result.notFound.map(n=>`• ${n}`).join('\n');
       await sendWhatsApp(from,reply);
       await sendEmail(order,name);
-    }else{
+    } else {
       await sendWhatsApp(from,'Error: '+result.error);
     }
-  }catch(e){
-    console.error('Handler:',e.message);
-    await sendWhatsApp(from,'Error placing order.');
-  }
+  } catch(e) { await sendWhatsApp(from,'Error placing order.'); }
 });
 
 app.get('/',(req,res)=>res.send('Naan & Curry Agent'));
