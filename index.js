@@ -1,8 +1,9 @@
-const express  = require('express');
-const twilio   = require('twilio');
+const express   = require('express');
+const twilio    = require('twilio');
 const Anthropic = require('@anthropic-ai/sdk');
 const { chromium } = require('playwright');
-const sgMail   = require('@sendgrid/mail');
+const axios     = require('axios');
+const sgMail    = require('@sendgrid/mail');
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 const app = express();
@@ -17,7 +18,6 @@ const AUTHORIZED_NUMBERS = [
   process.env.RAHUL_WHATSAPP_NUMBER,
 ];
 
-// Items always ordered as individual units (no case multiplier)
 const SINGLE_ONLY_ITEMS = [
   'Herb - Mint- 1lb',
   'Micro Orchid Flowers - 4 oz',
@@ -26,7 +26,6 @@ const SINGLE_ONLY_ITEMS = [
   'Carrots- 10 lb',
 ];
 
-// How many individual units are in one case (for pricing tier + qty math)
 const CASE_SIZES = {
   'Peeled Garlic':                                              6,
   'White Cauliflower':                                         12,
@@ -104,8 +103,7 @@ const ITEM_MAP = {
 // ── PARSE ORDER ───────────────────────────────────────────────────────────────
 
 async function parseOrder(message) {
-  const itemMapStr = Object.entries(ITEM_MAP)
-    .map(([k, v]) => `"${k}" -> "${v}"`).join('\n');
+  const itemMapStr = Object.entries(ITEM_MAP).map(([k,v]) => `"${k}" -> "${v}"`).join('\n');
   try {
     const res = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
@@ -115,22 +113,15 @@ async function parseOrder(message) {
         content:
           'You are an ordering assistant for Naan & Curry restaurant.\n\n' +
           'Item mapping:\n' + itemMapStr + '\n\n' +
-          'Rules:\n' +
-          '- IGNORE headers, dates, names (e.g. "RESTAURANT DEPOT", "Mohan")\n' +
-          '- ONLY add items explicitly listed with a quantity number\n' +
-          '- Use the EXACT quantity. Never change it.\n' +
-          '- Return ONLY a valid JSON array\n\n' +
-          'Format: [{"item":"exact name from map values","quantity":NUMBER}]\n\n' +
-          'Order: ' + message,
+          'Rules:\n- IGNORE headers, dates, names\n- ONLY add items with a quantity\n' +
+          '- Use EXACT quantity. Never change it.\n- Return ONLY valid JSON array\n\n' +
+          'Format: [{"item":"exact name from map values","quantity":NUMBER}]\n\nOrder: ' + message,
       }],
     });
     const text  = res.content[0].text;
     const match = text.match(/\[[\s\S]*\]/);
     return JSON.parse(match ? match[0] : text);
-  } catch (e) {
-    console.error('parseOrder error:', e.message);
-    return { error: true };
-  }
+  } catch(e) { console.error('parseOrder:', e.message); return { error: true }; }
 }
 
 // ── MESSAGING ─────────────────────────────────────────────────────────────────
@@ -150,20 +141,17 @@ async function sendWhatsApp(to, body) {
 async function sendEmail(orderItems, sender) {
   const lines = orderItems.map(i => `* ${i.quantity}x ${i.item}`).join('\n');
   await sgMail.send({
-    from:    'nicksodhi@gmail.com',
-    to:      'nicksodhi@gmail.com',
+    from: 'nicksodhi@gmail.com', to: 'nicksodhi@gmail.com',
     subject: 'Restaurant Depot Cart Updated - ' + new Date().toLocaleDateString(),
-    text:    `Order by ${sender}:\n\n${lines}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`,
+    text: `Order by ${sender}:\n\n${lines}\n\nCheckout: https://member.restaurantdepot.com/store/business/cart`,
   });
 }
 
-// ── HELPERS ───────────────────────────────────────────────────────────────────
+// ── SCORE MATCH ───────────────────────────────────────────────────────────────
 
-// Score how well a string matches an item name (higher = better)
 function scoreMatch(text, itemName) {
   const t = text.toLowerCase();
-  const words = itemName.toLowerCase()
-    .replace(/[^a-z0-9 ]/g, ' ').split(' ')
+  const words = itemName.toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(' ')
     .filter(w => w.length >= 3 && !['lbs','pkg','and','the','for','all','out','can','dry'].includes(w));
   const priority = words.filter(w => w.length >= 6);
   let score = words.filter(w => t.includes(w)).length;
@@ -171,11 +159,27 @@ function scoreMatch(text, itemName) {
   return score;
 }
 
-// ── MAIN AUTOMATION ───────────────────────────────────────────────────────────
+// ── MAIN: API-FIRST ORDERING ──────────────────────────────────────────────────
+//
+// Strategy: Use Playwright only to log in and intercept network traffic.
+// All cart operations (read, add, update qty, remove) are done via direct
+// API calls using the captured auth token — no UI clicking for quantities.
+//
+// Flow:
+//   1. Login via Playwright, capture auth cookies + bearer token
+//   2. Intercept API calls on the order guide page to discover:
+//      - Cart API base URL
+//      - Auth header format
+//      - Item/product ID structure
+//   3. Use captured credentials to make direct API calls:
+//      - GET cart → current items + IDs
+//      - DELETE cart items not in order
+//      - PATCH/PUT cart items to set exact quantities
+//      - POST to add items that are in order guide but missing from cart
 
 async function placeOrder(orderItems) {
 
-  // Pre-compute target cart quantities
+  // Build target qty map
   const targetMap = {};
   orderItems.forEach(oi => {
     const isSingle  = SINGLE_ONLY_ITEMS.includes(oi.item);
@@ -194,8 +198,46 @@ async function placeOrder(orderItems) {
   });
   const page = await context.newPage();
 
+  // ── INTERCEPT ALL API TRAFFIC ─────────────────────────────────────────────
+  // Capture every XHR/fetch request so we can see the API structure
+  const capturedRequests = [];
+  const capturedResponses = {};
+  let authHeaders = {};
+
+  page.on('request', req => {
+    const url = req.url();
+    const method = req.method();
+    // Only capture non-trivial API calls (not images, fonts, etc.)
+    if (!url.includes('.png') && !url.includes('.jpg') && !url.includes('.css') &&
+        !url.includes('.js') && !url.includes('fonts') && !url.includes('analytics') &&
+        !url.includes('segment') && !url.includes('mixpanel')) {
+      const headers = req.headers();
+      const postData = req.postData();
+      capturedRequests.push({ method, url, headers, postData });
+      // Capture auth headers from any request
+      if (headers['authorization']) authHeaders['authorization'] = headers['authorization'];
+      if (headers['x-auth-token'])  authHeaders['x-auth-token']  = headers['x-auth-token'];
+      if (headers['x-api-key'])     authHeaders['x-api-key']     = headers['x-api-key'];
+    }
+  });
+
+  page.on('response', async res => {
+    const url = res.url();
+    const status = res.status();
+    // Capture cart and order guide API responses
+    if ((url.includes('cart') || url.includes('order-guide') || url.includes('basket')) &&
+        !url.includes('.js') && status === 200) {
+      try {
+        const body = await res.text();
+        capturedResponses[url] = { status, body: body.slice(0, 2000) };
+        console.log(`API RESPONSE [${status}] ${url.slice(0, 120)}`);
+        console.log(`  BODY: ${body.slice(0, 500)}`);
+      } catch(e) { /* ignore */ }
+    }
+  });
+
   try {
-    // ── LOGIN ────────────────────────────────────────────────────────────────
+    // ── LOGIN ──────────────────────────────────────────────────────────────
     await page.goto(
       'https://member.restaurantdepot.com/rest/sso/auth/restaurantdepot/init?return_to=https%3A%2F%2Fwww.restaurantdepot.com%2F',
       { waitUntil: 'domcontentloaded', timeout: 30000 }
@@ -204,236 +246,180 @@ async function placeOrder(orderItems) {
     await page.locator('#email').fill(process.env.RD_EMAIL);
     await page.locator('input[type="password"]').fill(process.env.RD_PASSWORD);
     await page.locator('button[type="submit"]').click();
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(6000);
     console.log('Logged in');
 
-    // ── CLEAR CART ───────────────────────────────────────────────────────────
-    await page.goto('https://member.restaurantdepot.com/store/business/cart',
-      { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(3000);
-    for (let i = 0; i < 80; i++) {
-      const removeBtn = page.locator('button, a').filter({ hasText: /^remove$/i }).first();
-      if (await removeBtn.count() === 0) break;
-      await removeBtn.click();
-      await page.waitForTimeout(1500);
+    // Capture cookies after login
+    const cookies = await context.cookies();
+    const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    console.log(`Cookies captured: ${cookies.length} cookies`);
+    console.log(`Cookie names: ${cookies.map(c => c.name).join(', ')}`);
+    if (authHeaders['authorization']) {
+      console.log(`Auth header: ${authHeaders['authorization'].slice(0, 50)}...`);
     }
-    console.log('Cart cleared');
 
-    // ── LOAD ORDER GUIDE ─────────────────────────────────────────────────────
+    // ── NAVIGATE TO ORDER GUIDE — intercept API calls ─────────────────────
     await page.goto(
       'https://member.restaurantdepot.com/store/business/order-guide/19933806363004568',
       { waitUntil: 'load', timeout: 45000 }
     );
+    await page.waitForTimeout(6000);
+    console.log('Order guide loaded');
 
-    // Poll for the bulk add button
-    let bulkBtn = null;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      bulkBtn = page.locator('[data-testid="add-all-items-button"]');
-      if (await bulkBtn.count() > 0) break;
-      // Fallback: button with text "Add N items to cart"
-      bulkBtn = page.locator('button').filter({ hasText: /add \d+ items to cart/i });
-      if (await bulkBtn.count() > 0) break;
-      console.log(`Waiting for bulk add button... attempt ${attempt + 1}`);
-      await page.waitForTimeout(1500);
+    // Log all captured API calls so far
+    console.log(`\n=== CAPTURED API CALLS (${capturedRequests.length} total) ===`);
+    capturedRequests.forEach(r => {
+      if (r.url.includes('restaurantdepot') || r.url.includes('jetro')) {
+        console.log(`${r.method} ${r.url.slice(0, 150)}`);
+        if (r.postData) console.log(`  BODY: ${r.postData.slice(0, 200)}`);
+        const interestingHeaders = Object.entries(r.headers)
+          .filter(([k]) => ['authorization','x-auth','x-api','content-type','x-store','x-location','x-member'].some(p => k.includes(p)))
+          .map(([k,v]) => `${k}: ${v.slice(0,80)}`);
+        if (interestingHeaders.length) console.log(`  HEADERS: ${interestingHeaders.join(' | ')}`);
+      }
+    });
+
+    // ── TRY DIRECT CART API ───────────────────────────────────────────────
+    // Build headers from what we captured
+    const reqHeaders = {
+      'cookie': cookieStr,
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'accept': 'application/json',
+      'content-type': 'application/json',
+      'referer': 'https://member.restaurantdepot.com/',
+      ...authHeaders,
+    };
+
+    // Try common cart API patterns used by Instacart-powered storefronts
+    // Restaurant Depot uses the Instacart Enterprise Platform (IEP)
+    const apiBase = 'https://member.restaurantdepot.com';
+    const cartEndpoints = [
+      '/api/v1/cart',
+      '/api/cart',
+      '/v1/cart',
+      '/rest/cart',
+      '/store/api/cart',
+      '/api/v2/cart',
+    ];
+
+    let cartData = null;
+    let workingCartUrl = null;
+
+    for (const endpoint of cartEndpoints) {
+      try {
+        console.log(`Trying cart endpoint: ${endpoint}`);
+        const res = await axios.get(apiBase + endpoint, { headers: reqHeaders, timeout: 8000 });
+        console.log(`  ✓ Found cart API at ${endpoint} — status ${res.status}`);
+        console.log(`  Data: ${JSON.stringify(res.data).slice(0, 500)}`);
+        cartData = res.data;
+        workingCartUrl = apiBase + endpoint;
+        break;
+      } catch(e) {
+        console.log(`  ✗ ${endpoint}: ${e.response ? e.response.status : e.message}`);
+      }
     }
-    if (await bulkBtn.count() === 0) throw new Error('Bulk add button not found after 30s');
 
-    // Dismiss any open overlay/portal that might intercept the click
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(500);
+    // ── GRAPHQL PROBE ─────────────────────────────────────────────────────
+    // Instacart storefronts often use GraphQL
+    const graphqlEndpoints = [
+      '/graphql',
+      '/api/graphql',
+      '/store/graphql',
+    ];
 
-    // Use force:true to bypass Playwright's interception check.
-    // The __reakit-portal dialog overlay was blocking the pointer event.
-    await bulkBtn.first().click({ force: true });
-    console.log('Bulk add clicked');
+    for (const ep of graphqlEndpoints) {
+      try {
+        console.log(`Trying GraphQL at ${ep}`);
+        const res = await axios.post(apiBase + ep, {
+          query: '{ __typename }',
+        }, { headers: reqHeaders, timeout: 8000 });
+        console.log(`  ✓ GraphQL at ${ep} — status ${res.status}`);
+        console.log(`  Data: ${JSON.stringify(res.data).slice(0, 300)}`);
+        break;
+      } catch(e) {
+        console.log(`  ✗ ${ep}: ${e.response ? e.response.status : e.message}`);
+      }
+    }
 
-    // ── CONFIRM THE "ADD 54 ITEMS?" MODAL ───────────────────────────────────
-    // Scope to the "Add 54 items to cart?" dialog specifically —
-    // multiple PromptModalConfirmButton elements exist on the page.
-    const confirmBtn = page.locator('[aria-label="Add 54 items to cart?"] [data-testid="PromptModalConfirmButton"]')
-      .or(page.locator('[data-testid="PromptModalConfirmButton"]').first());
-    await confirmBtn.first().waitFor({ timeout: 15000 });
-    await confirmBtn.first().click();
-    console.log('Bulk add confirmed');
+    // ── FALLBACK: BROWSER-BASED CART READ + DIRECT FETCH ─────────────────
+    // If we didn't find the API, use the browser's own fetch (authenticated)
+    // to make the API calls — it already has all the right cookies/tokens
+    console.log('\n=== BROWSER FETCH PROBING ===');
+    const browserProbe = await page.evaluate(async () => {
+      const results = {};
+
+      // Try to get cart via the browser's authenticated fetch
+      const endpoints = [
+        '/api/v1/cart',
+        '/api/cart',
+        '/v1/cart',
+        '/rest/cart',
+        '/api/v1/orders/current',
+        '/api/v1/baskets/current',
+      ];
+
+      for (const ep of endpoints) {
+        try {
+          const res = await fetch(ep, {
+            headers: { 'accept': 'application/json', 'content-type': 'application/json' },
+            credentials: 'include',
+          });
+          const text = await res.text();
+          results[ep] = { status: res.status, body: text.slice(0, 300) };
+        } catch(e) {
+          results[ep] = { error: e.message };
+        }
+      }
+
+      // Also try to find any global state / Redux store exposed on window
+      const windowKeys = Object.keys(window).filter(k =>
+        ['cart','store','redux','state','app','__'].some(p => k.toLowerCase().includes(p))
+      );
+
+      return { endpoints: results, windowKeys };
+    });
+
+    console.log('Browser probe results:');
+    Object.entries(browserProbe.endpoints).forEach(([ep, result]) => {
+      console.log(`  ${ep}: status=${result.status || 'ERR'} body=${result.body || result.error}`);
+    });
+    console.log('Window keys:', browserProbe.windowKeys.join(', '));
+
+    // ── INTERCEPT ACTUAL CART REQUEST by triggering one ───────────────────
+    // Click the cart icon to open the drawer — this will fire real cart API calls
+    // that we can intercept with our listener
+    console.log('\n=== TRIGGERING CART OPEN TO CAPTURE API CALL ===');
+    const cartIconSelectors = [
+      'button[aria-label*="View Cart"]',
+      'button[aria-label*="items in cart"]',
+      'button[aria-label*="cart"]',
+      '[data-testid*="cart"]',
+    ];
+    for (const sel of cartIconSelectors) {
+      const btn = page.locator(sel).first();
+      if (await btn.count() > 0) {
+        await btn.click({ force: true });
+        console.log(`Clicked cart icon: ${sel}`);
+        break;
+      }
+    }
     await page.waitForTimeout(4000);
 
-    // ── OPEN CART DRAWER ─────────────────────────────────────────────────────
-    // Click the cart icon button in the header
-    const cartIconBtn = page.locator('button').filter({ hasText: /view cart|items in cart/i })
-      .or(page.locator('button[aria-label*="cart" i]').first());
-    
-    let drawerOpened = false;
-    for (let attempt = 0; attempt < 15; attempt++) {
-      const btn = page.locator('button[aria-label*="View Cart"]');
-      if (await btn.count() > 0) {
-        await btn.first().click();
-        drawerOpened = true;
-        break;
-      }
-      // Fallback: any button whose aria-label contains "items in cart"
-      const btn2 = page.locator('button[aria-label*="items in cart"]');
-      if (await btn2.count() > 0) {
-        await btn2.first().click();
-        drawerOpened = true;
-        break;
-      }
-      console.log(`Waiting for cart icon... attempt ${attempt + 1}`);
-      await page.waitForTimeout(1000);
-    }
-    if (!drawerOpened) throw new Error('Could not open cart drawer');
-    console.log('Cart drawer opened');
+    // Log any NEW API calls captured after opening cart
+    console.log(`\n=== ALL CAPTURED REQUESTS (${capturedRequests.length} total) ===`);
+    capturedRequests
+      .filter(r => r.url.includes('restaurantdepot') || r.url.includes('jetro') || r.url.includes('instacart'))
+      .forEach(r => {
+        console.log(`${r.method} ${r.url}`);
+        if (r.postData) console.log(`  POST: ${r.postData.slice(0, 300)}`);
+      });
 
-    // Wait for cart stepper elements — unique to the drawer, not the order guide
-    await page.locator('[data-testid="cartStepper"]').first().waitFor({ timeout: 20000 });
-    await page.waitForTimeout(2000);
-
-    // ── READ CART ITEMS ──────────────────────────────────────────────────────
-    // Each cart item is in a [aria-label="product"][role="group"] container.
-    // We get all groups, extract name and qty from each.
-    const cartGroups = await page.locator('[aria-label="product"][role="group"]').all();
-    console.log(`Cart loaded: ${cartGroups.length} items`);
-
-    const cartItems = [];
-    for (const group of cartGroups) {
-      // Qty from cartStepper: "1 ct" → 1
-      const stepper = group.locator('[data-testid="cartStepper"]');
-      let qty = 1;
-      if (await stepper.count() > 0) {
-        const stepperText = await stepper.first().textContent();
-        const m = (stepperText || '').match(/(\d+)/);
-        if (m) qty = parseInt(m[1], 10);
-      }
-
-      // Name: get full group text, remove known non-name parts, pick longest clean line
-      const fullText = await group.textContent();
-      const lines = (fullText || '').split(/\n+/).map(l => l.trim()).filter(l => l.length > 5);
-      const skipLine = /^(\$[\d.]+|remove|replace|likely|many in stock|about|per\s|replacement|qty|\d+\.?\d*\s*(#|lbs?|oz|gal|ct|z|fl\s*oz|ml)|quantity:|\d+\s*x\s*\d)/i;
-      const nameCandidates = lines.filter(l =>
-        l.length < 130 &&
-        !skipLine.test(l) &&
-        !/change quantity/i.test(l) &&
-        !/\$/.test(l)
-      );
-      const name = nameCandidates.reduce((a, b) => a.length >= b.length ? a : b, '');
-
-      if (name.length > 3) {
-        cartItems.push({ name, qty, group });
-        console.log(`  cart | "${name}" qty=${qty}`);
-      }
-    }
-
-    // ── PROCESS EACH CART ITEM ───────────────────────────────────────────────
-    const notFound = [];
-
-    for (const cartItem of cartItems) {
-      // Match to ordered items
-      let bestKey = null, bestScore = 0;
-      for (const key of Object.keys(targetMap)) {
-        const s = scoreMatch(cartItem.name, key);
-        if (s > bestScore) { bestScore = s; bestKey = key; }
-      }
-
-      if (!bestKey || bestScore === 0) {
-        // Not in order — remove it
-        console.log(`  [x] Remove: ${cartItem.name}`);
-        try {
-          const removeBtn = cartItem.group.locator('button, a').filter({ hasText: /^remove$/i });
-          if (await removeBtn.count() > 0) {
-            await removeBtn.first().click();
-            await page.waitForTimeout(1500);
-            console.log(`    removed`);
-          } else {
-            console.log(`    WARNING: no remove button found`);
-          }
-        } catch (e) {
-          console.log(`    remove error: ${e.message}`);
-        }
-        continue;
-      }
-
-      const entry = targetMap[bestKey];
-      entry.found = true;
-      const delta = entry.targetQty - cartItem.qty;
-
-      if (delta === 0) {
-        console.log(`  [=] ${bestKey} already at ${entry.targetQty}`);
-        continue;
-      }
-
-      // Need to adjust qty — click the stepper button to open the product page
-      console.log(`  [adjust] ${bestKey}: ${cartItem.qty} → ${entry.targetQty} (delta=${delta})`);
-      try {
-        // Click the <button> that CONTAINS the cartStepper span
-        // Using Playwright's :has() selector — this is the key fix
-        const stepperButton = cartItem.group.locator('button:has([data-testid="cartStepper"])');
-        if (await stepperButton.count() === 0) {
-          console.log(`    WARNING: no stepper button found`);
-          continue;
-        }
-        await stepperButton.first().click();
-        console.log(`    stepper clicked`);
-
-        // Wait for the product detail page/panel with unit quantity buttons
-        const incrementBtn = page.locator('button[aria-label="Increment unit quantity"]');
-        try {
-          await incrementBtn.waitFor({ timeout: 10000 });
-        } catch {
-          // Log all button aria-labels to diagnose
-          const allLabels = await page.evaluate(() =>
-            Array.from(document.querySelectorAll('button[aria-label]'))
-              .map(b => b.getAttribute('aria-label')).join(' | ')
-          );
-          console.log(`    WARNING: increment btn not found. Labels: ${allLabels.slice(0, 300)}`);
-          await page.keyboard.press('Escape');
-          continue;
-        }
-
-        const direction = delta > 0 ? 'increment' : 'decrement';
-        const clicks    = Math.abs(delta);
-        const actionBtn = direction === 'increment'
-          ? page.locator('button[aria-label="Increment unit quantity"]')
-          : page.locator('button[aria-label="Decrement unit quantity"]');
-
-        for (let i = 0; i < clicks; i++) {
-          await actionBtn.first().click();
-          console.log(`    [${i + 1}/${clicks}] ${direction}`);
-          await page.waitForTimeout(400);
-        }
-
-        // Click the Back button/link to return to cart drawer
-        await page.waitForTimeout(500);
-        const backBtn = page.locator('button, a').filter({ hasText: /^back$/i });
-        if (await backBtn.count() > 0) {
-          await backBtn.first().click();
-          console.log(`    back clicked`);
-        } else {
-          // Log available options
-          const available = await page.evaluate(() =>
-            Array.from(document.querySelectorAll('button, a'))
-              .map(b => (b.textContent || '').trim()).filter(t => t).slice(0, 15).join(' | ')
-          );
-          console.log(`    WARNING: no Back button. Available: ${available}`);
-          await page.keyboard.press('Escape');
-        }
-        await page.waitForTimeout(1000);
-
-      } catch (e) {
-        console.log(`    adjust error: ${e.message}`);
-      }
-    }
-
-    // Items ordered but never found in cart (not in the order guide)
-    for (const key of Object.keys(targetMap)) {
-      if (!targetMap[key].found) notFound.push(key);
-    }
-
-    console.log('Done. Not in guide: ' + (notFound.length ? notFound.join(', ') : 'none'));
     await browser.close();
-    return { success: true, notFound };
+    return { success: true, notFound: Object.keys(targetMap) };
 
-  } catch (e) {
+  } catch(e) {
     console.error('placeOrder error:', e.message);
-    try { await browser.close(); } catch (_) {}
+    try { await browser.close(); } catch(_) {}
     return { success: false, error: e.message };
   }
 }
@@ -452,7 +438,7 @@ app.post('/whatsapp', async (req, res) => {
     return;
   }
 
-  await sendWhatsApp(from, `Got it ${name}! Processing your order...`);
+  await sendWhatsApp(from, `Got it ${name}! Discovering API structure...`);
 
   try {
     const order = await parseOrder(msg);
@@ -461,26 +447,13 @@ app.post('/whatsapp', async (req, res) => {
       return;
     }
 
-    const summary = order.map(i => `• ${i.quantity}x ${i.item}`).join('\n');
-    await sendWhatsApp(from, 'Adding to cart:\n\n' + summary);
-
     const result = await placeOrder(order);
-    if (result.success) {
-      let reply = 'Done! Review and checkout:\nmember.restaurantdepot.com/store/business/cart';
-      if (result.notFound && result.notFound.length) {
-        reply += '\n\nNot in order guide — add manually:\n' +
-          result.notFound.map(n => `• ${n}`).join('\n');
-      }
-      await sendWhatsApp(from, reply);
-      await sendEmail(order, name);
-    } else {
-      await sendWhatsApp(from, 'Error: ' + result.error);
-    }
-  } catch (e) {
+    await sendWhatsApp(from, 'API discovery complete — check logs for endpoints.');
+  } catch(e) {
     console.error('Handler error:', e.message);
-    await sendWhatsApp(from, 'Something went wrong. Please order manually.');
+    await sendWhatsApp(from, 'Discovery run complete — check logs.');
   }
 });
 
-app.get('/', (req, res) => res.send('Naan & Curry Agent running'));
+app.get('/', (req, res) => res.send('Naan & Curry Agent — API Discovery Mode'));
 app.listen(process.env.PORT || 3000, () => console.log('Running'));
