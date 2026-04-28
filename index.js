@@ -238,7 +238,13 @@ async function placeOrder(orderItems) {
     }
     if (await bulkBtn.count() === 0) throw new Error('Bulk add button not found after 30s');
 
-    await bulkBtn.first().click();
+    // Dismiss any open overlay/portal that might intercept the click
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+
+    // Use force:true to bypass Playwright's interception check.
+    // The __reakit-portal dialog overlay was blocking the pointer event.
+    await bulkBtn.first().click({ force: true });
     console.log('Bulk add clicked');
 
     // ── CONFIRM THE "ADD 54 ITEMS?" MODAL ───────────────────────────────────
