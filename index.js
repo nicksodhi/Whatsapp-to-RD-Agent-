@@ -308,6 +308,32 @@ async function placeOrder(orderItems) {
     }
     console.log(`ProductId→CartItemId map size: ${Object.keys(productIdToCartItemId).length}`);
 
+    // CRITICAL: Build reverse map cartItemId → productId
+    // We need productId to construct itemId in 'items_473296-{productId}' format for mutations.
+    const cartItemIdToProductId = {};
+    Object.entries(productIdToCartItemId).forEach(([pid, cid]) => {
+      cartItemIdToProductId[cid] = pid;
+    });
+    console.log(`CartItemId→ProductId map size: ${Object.keys(cartItemIdToProductId).length}`);
+
+    // Now backfill itemIdPrefixed on every allCartItems entry using this map
+    let backfilled = 0;
+    allCartItems.forEach(ci => {
+      if (!ci.itemIdPrefixed || ci.itemIdPrefixed.includes('undefined') || ci.itemIdPrefixed.includes('null')) {
+        const pid = cartItemIdToProductId[ci.cartItemId] || ci.productId;
+        if (pid) {
+          ci.itemIdPrefixed = `items_473296-${pid}`;
+          ci.productId = pid;
+          backfilled++;
+        }
+      }
+    });
+    console.log(`Backfilled itemIdPrefixed on ${backfilled} cart items`);
+    // Sample check
+    allCartItems.slice(0, 3).forEach(ci => 
+      console.log(`  ci: cartItemId=${ci.cartItemId} itemIdPrefixed=${ci.itemIdPrefixed} productId=${ci.productId}`)
+    );
+
     // Step 4: Build cartItemId → name map
     const cartItemIdToName={};
     // Via productId chain
@@ -431,6 +457,9 @@ async function placeOrder(orderItems) {
       // {"cartItemUpdates":[{"itemId":"items_473296-XXXXXXX","quantity":N,"quantityType":"each",...}]}
       // The itemId is the prefixed format (items_RETAILERLOC-PRODUCTID), NOT the numeric cart item ID.
       async function updateQty(itemIdPrefixed, targetQty, cartId, hash) {
+        if (!itemIdPrefixed || itemIdPrefixed === 'undefined' || itemIdPrefixed.includes('undefined')) {
+          return { ok: false, err: 'no itemIdPrefixed: ' + itemIdPrefixed };
+        }
         // Build minimal trackingParams (the site sends huge ones but minimal should work)
         const trackingParams = { trackingProperties: { source: 'cart' } };
         const mutations = [
@@ -475,9 +504,11 @@ async function placeOrder(orderItems) {
           if (action.action === 'skip') {
             results.push({ action: 'skip', name: action.name, qty: action.targetQty });
           } else if (action.action === 'update') {
+            await new Promise(r => setTimeout(r, 250)); // throttle to avoid hammering server
             const r = await updateQty(action.itemIdPrefixed, action.targetQty, cartId, updateMutationHash);
             results.push({ action: 'update', name: action.name, from: action.currentQty, to: action.targetQty, id: action.itemIdPrefixed, ...r });
           } else if (action.action === 'remove') {
+            await new Promise(r => setTimeout(r, 250));
             const r = await removeItem(action.itemIdPrefixed, cartId, updateMutationHash);
             results.push({ action: 'remove', name: action.name, id: action.cartItemId, ...r });
           }
@@ -492,7 +523,14 @@ async function placeOrder(orderItems) {
     // Parse and log results
     let parsedResults = [];
     try { parsedResults = JSON.parse(results); } catch(e) { console.log('Results parse err:', e.message); }
-    console.log('\n=== RESULTS ===');
+    console.log('=== RESULTS ===');
+    let okCount = 0, failCount = 0;
+    (results || []).forEach(r => {
+      const status = r.ok ? 'OK' : (r.action === 'skip' ? 'SKIP' : 'FAIL');
+      console.log(`${status} | ${r.action} | ${(r.name || '').slice(0,50)} | from=${r.from || ''} to=${r.to !== undefined ? r.to : r.qty} | id=${(r.id || '').slice(0,30)} | err=${(r.err || '').slice(0,80)}`);
+      if (r.ok) okCount++; else if (r.action !== 'skip') failCount++;
+    });
+    console.log(`SUMMARY: ${okCount} succeeded, ${failCount} failed`);
     parsedResults.forEach(r => console.log(JSON.stringify(r)));
 
     const notFound = Object.entries(targetMap).filter(([k,v])=>!v.found).map(([k])=>k);
