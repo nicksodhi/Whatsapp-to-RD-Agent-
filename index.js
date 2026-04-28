@@ -335,20 +335,79 @@ async function placeOrder(orderItems) {
     );
 
     // Step 4: Build cartItemId → name map
-    const cartItemIdToName={};
-    // Via productId chain
-    Object.entries(productIdToCartItemId).forEach(([pid, cid])=>{
-      const name = productIdToName[pid];
-      if(name) cartItemIdToName[cid]=name;
+    // CRITICAL FIX: Read directly from Apollo cache. The cart drawer loads cart items
+    // with their full product info into the cache. We traverse __ref chains to get names.
+    const cartItemIdToName = {};
+    
+    const apolloItems = await page.evaluate(() => {
+      try {
+        const cache = window.__APOLLO_CLIENT__?.cache?.extract();
+        if (!cache) return { error: 'no cache' };
+        const results = [];
+        // Find all cache entries that look like cart items
+        Object.entries(cache).forEach(([key, val]) => {
+          if (!val || typeof val !== 'object') return;
+          const tn = (val.__typename || '').toLowerCase();
+          // Cart item — has quantity and id
+          if (!tn.includes('cart') && !tn.includes('item') && !tn.includes('basket')) return;
+          if (!val.id || typeof val.quantity !== 'number') return;
+          
+          // Walk all fields for product references
+          let productName = null;
+          let productId = null;
+          
+          function walkForName(obj, depth) {
+            if (!obj || depth > 3) return;
+            if (typeof obj !== 'object') return;
+            if (obj.name && typeof obj.name === 'string' && obj.name.length > 3 && !productName) {
+              productName = obj.name;
+            }
+            if (obj.productId && !productId) productId = String(obj.productId);
+            // Follow __ref chains
+            if (obj.__ref && cache[obj.__ref]) {
+              walkForName(cache[obj.__ref], depth + 1);
+            }
+            // Walk all values
+            if (!obj.__ref) {
+              Object.values(obj).forEach(v => {
+                if (v && typeof v === 'object') walkForName(v, depth + 1);
+              });
+            }
+          }
+          walkForName(val, 0);
+          
+          if (productName || productId) {
+            results.push({
+              cartItemId: String(val.id),
+              quantity: val.quantity,
+              productName: productName || '',
+              productId: productId || '',
+              typename: val.__typename,
+            });
+          }
+        });
+        return results;
+      } catch(e) { return { error: e.message }; }
     });
-    // Also try from allCartItems direct productId
-    allCartItems.forEach(ci=>{
-      if(ci.productId && productIdToName[String(ci.productId)]){
-        cartItemIdToName[ci.cartItemId] = productIdToName[String(ci.productId)];
+    
+    console.log(`Apollo lookup found ${Array.isArray(apolloItems) ? apolloItems.length : 0} cart items with names`);
+    if (Array.isArray(apolloItems)) {
+      apolloItems.slice(0, 5).forEach(i => console.log(`  ${i.cartItemId} (${i.typename}) → "${i.productName}" pid=${i.productId}`));
+      apolloItems.forEach(item => {
+        if (item.productName) cartItemIdToName[item.cartItemId] = item.productName;
+      });
+    }
+    
+    // Fallback: also try the productIdToCartItemId chain in case Apollo is empty
+    Object.entries(productIdToCartItemId).forEach(([pid, cid])=>{
+      if (!cartItemIdToName[cid]) {
+        const name = productIdToName[pid];
+        if(name) cartItemIdToName[cid]=name;
       }
     });
+    
     console.log(`CartItemId→Name map size: ${Object.keys(cartItemIdToName).length}`);
-    Object.entries(cartItemIdToName).slice(0,5).forEach(([cid,name])=>console.log(`  ${cid} → ${name}`));
+    Object.entries(cartItemIdToName).slice(0,8).forEach(([cid,name])=>console.log(`  ${cid} → ${name}`));
 
     // Step 5: Also read DOM for name→cartItemId via matching
     const domGroups=await page.evaluate(()=>{
@@ -370,56 +429,48 @@ async function placeOrder(orderItems) {
     // Match each ordered item to a cart item ID
     const actions=[]; // {cartItemId, name, currentQty, targetQty, action:'update'|'remove'|'skip'}
 
-    // First: process items we have IDs for
-    const usedCartItemIds=new Set();
+    // CRITICAL FIX: Each ordered item can match AT MOST ONE cart item.
+    // We iterate ordered items first and find their best cart item match.
+    // Cart items not matched to any order get REMOVED.
+    const usedCartItemIds = new Set();
+    const matchedTargets = new Set();
 
-    // For each cart item with a known name, try to match to ordered items
-    allCartItems.forEach(ci=>{
-      const ciName = cartItemIdToName[ci.cartItemId]||'';
-      if(!ciName) return; // will handle via DOM fallback
+    // Build a list of cart items with their best name (Apollo > DOM by index)
+    const cartItemsWithNames = allCartItems.map((ci, idx) => ({
+      ...ci,
+      name: cartItemIdToName[ci.cartItemId] || (domGroups[idx]?.name || ''),
+    }));
 
-      let bestKey=null,bestS=0;
-      for(const key of Object.keys(targetMap)){
-        const s=score(ciName,key);
-        if(s>bestS){bestS=s;bestKey=key;}
+    // For each ORDERED item, find its single best matching cart item
+    for (const orderedKey of Object.keys(targetMap)) {
+      let bestCi = null, bestScore = 0;
+      for (const ci of cartItemsWithNames) {
+        if (usedCartItemIds.has(ci.cartItemId)) continue;
+        if (!ci.name) continue;
+        const s = score(ci.name, orderedKey);
+        if (s > bestScore) { bestScore = s; bestCi = ci; }
       }
-
-      usedCartItemIds.add(ci.cartItemId);
-      if(!bestKey||bestS===0){
-        actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:ciName,currentQty:ci.quantity,targetQty:0,action:'remove'});
-      } else {
-        targetMap[bestKey].found=true;
-        const tq=targetMap[bestKey].targetQty;
-        if(ci.quantity===tq){
-          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
+      // Require strong match (at least 3 points) to prevent fuzzy mismatches
+      if (bestCi && bestScore >= 3) {
+        usedCartItemIds.add(bestCi.cartItemId);
+        matchedTargets.add(orderedKey);
+        targetMap[orderedKey].found = true;
+        const tq = targetMap[orderedKey].targetQty;
+        if (bestCi.quantity === tq) {
+          actions.push({cartItemId:bestCi.cartItemId,itemIdPrefixed:bestCi.itemIdPrefixed,name:orderedKey,currentQty:bestCi.quantity,targetQty:tq,action:'skip'});
         } else {
-          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
+          actions.push({cartItemId:bestCi.cartItemId,itemIdPrefixed:bestCi.itemIdPrefixed,name:orderedKey,currentQty:bestCi.quantity,targetQty:tq,action:'update'});
         }
-      }
-    });
-
-    // For cart items without names, try DOM matching
-    const unmatchedCartItems=allCartItems.filter(ci=>!usedCartItemIds.has(ci.cartItemId));
-    domGroups.forEach((dom,idx)=>{
-      if(idx>=unmatchedCartItems.length)return;
-      const ci=unmatchedCartItems[idx];
-      let bestKey=null,bestS=0;
-      for(const key of Object.keys(targetMap)){
-        const s=score(dom.name,key);
-        if(s>bestS){bestS=s;bestKey=key;}
-      }
-      usedCartItemIds.add(ci.cartItemId);
-      if(!bestKey||bestS===0){
-        actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:dom.name,currentQty:ci.quantity,targetQty:0,action:'remove'});
+        console.log(`  matched: "${orderedKey}" → "${bestCi.name}" (score=${bestScore}, id=${bestCi.cartItemId})`);
       } else {
-        targetMap[bestKey].found=true;
-        const tq=targetMap[bestKey].targetQty;
-        if(ci.quantity===tq){
-          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'skip'});
-        } else {
-          actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:bestKey,currentQty:ci.quantity,targetQty:tq,action:'update'});
-        }
+        console.log(`  unmatched ordered: "${orderedKey}" (best score=${bestScore})`);
       }
+    }
+
+    // ALL cart items NOT matched to any order → REMOVE
+    cartItemsWithNames.forEach(ci => {
+      if (usedCartItemIds.has(ci.cartItemId)) return;
+      actions.push({cartItemId:ci.cartItemId,itemIdPrefixed:ci.itemIdPrefixed,name:ci.name||ci.cartItemId,currentQty:ci.quantity,targetQty:0,action:'remove'});
     });
 
     console.log(`Actions: ${actions.length} (updates=${actions.filter(a=>a.action==='update').length} removes=${actions.filter(a=>a.action==='remove').length} skips=${actions.filter(a=>a.action==='skip').length})`);
