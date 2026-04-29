@@ -39,6 +39,8 @@ const CASE_SIZES = {
   'Royal Mahout - Paneer Loaf - 5 lbs': 4,
   // Pan spray always by case (6 cans)
   "Chef's Quality - All Purpose Pan Spray - 17 oz": 6,
+  // Shredded cheese always by case (4 bags)
+  'James Farm - Shredded Cheddar Jack Cheese - 5 lbs': 4,
 };
 
 const ITEM_MAP = {
