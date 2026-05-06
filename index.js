@@ -199,6 +199,10 @@ function score(text, name) {
   let s=words.filter(w=>t.includes(w)).length;     // base: 1pt per word match
   pri.forEach(w=>{if(t.includes(w))s+=3;});         // +3 for medium-distinctive
   dist.forEach(w=>{if(t.includes(w))s+=5;});        // +5 for super-distinctive
+  // Prefix bonus: if cart text starts with the same first word as orderedKey,
+  // it's almost certainly the same item. Strong signal even for short codes
+  // like "SHRP P&D TF 16-20" → "shrp" → matches start of cart text.
+  if (words.length > 0 && t.startsWith(words[0])) s += 3;
   return s;
 }
 
@@ -607,7 +611,7 @@ async function placeOrder(orderItems) {
         const s = score(e.name, searchName);
         if (s > bestScore) { bestScore = s; best = e; }
       }
-      if (best && bestScore >= 2) {
+      if (best && bestScore >= 1) {
         usedCartItemIds.add(best.cartItemId);
         targetMap[orderedKey].found = true;
         const tq = targetMap[orderedKey].targetQty;
