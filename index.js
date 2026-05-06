@@ -133,6 +133,9 @@ const ITEM_MAP = {
   'cooking spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
   'serrano peppers': 'Serrano Peppers',
   'serrano': 'Serrano Peppers',
+  'green bell peppers': 'Green Bell Peppers',
+  'green peppers': 'Green Bell Peppers',
+  'bell peppers': 'Green Bell Peppers',
   'white vinegar': 'White Vinegar - gallon',
   'vinegar': 'White Vinegar - gallon',
   'egg yellow': 'Egg Yellow Food Coloring - gallon',
@@ -145,6 +148,17 @@ const ITEM_MAP = {
   'shrimp': 'SHRP P&D TF 16-20',
   'coconut milk': 'COCONUT MILK REGULAR - 400ML',
 };
+
+// Build reverse map: product name → list of all aliases that point to it.
+// Used by the matching logic to also score against alias keywords like "shrimp"
+// so when the cart shows "Fresh Shrimp - 4 lbs" but our product name is
+// "SHRP P&D TF 16-20" we can still match via the alias.
+const NAME_TO_ALIASES = {};
+Object.entries(ITEM_MAP).forEach(([alias, name]) => {
+  if (!NAME_TO_ALIASES[name]) NAME_TO_ALIASES[name] = [];
+  NAME_TO_ALIASES[name].push(alias);
+});
+
 
 async function parseOrder(msg) {
   const map = Object.entries(ITEM_MAP).map(([k,v])=>`"${k}" -> "${v}"`).join('\n');
@@ -582,9 +596,12 @@ async function placeOrder(orderItems) {
     // For each ORDERED item, find single best matching cart entry by name
     for (const orderedKey of Object.keys(targetMap)) {
       let best = null, bestScore = 0;
+      // Augment the search name with all aliases (e.g. "shrimp" for "SHRP P&D TF 16-20")
+      const aliases = (NAME_TO_ALIASES[orderedKey] || []).join(' ');
+      const searchName = orderedKey + ' ' + aliases;
       for (const e of cartEntries) {
         if (usedCartItemIds.has(e.cartItemId)) continue;
-        const s = score(e.name, orderedKey);
+        const s = score(e.name, searchName);
         if (s > bestScore) { bestScore = s; best = e; }
       }
       if (best && bestScore >= 2) {
