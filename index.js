@@ -51,6 +51,10 @@ const CASE_SIZES = {
   'Cleaned Spinach - 2.5 lbs': 4,
   // Coconut milk — case of 24 cans
   'COCONUT MILK REGULAR - 400ML': 24,
+  // Frozen chopped spinach — case of 12
+  'Frozen James Farm - Frozen Chopped Spinach - 3 lbs': 12,
+  // Garbanzo beans — case of 6 #10 cans
+  "Chef's Quality - Garbanzo Beans - #10 can": 6,
 };
 
 const ITEM_MAP = {
