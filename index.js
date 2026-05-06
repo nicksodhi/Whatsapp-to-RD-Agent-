@@ -146,6 +146,9 @@ const ITEM_MAP = {
   'fancy cheese': 'Fancy Shredded Cheddar Jack Cheese',
   'cheese blend': 'Fancy Shredded Cheddar Jack Cheese',
   'shrimp': 'SHRP P&D TF 16-20',
+  'shrimp 16-18': 'SHRP P&D TF 16-20',
+  'shrimp 16-20': 'SHRP P&D TF 16-20',
+  'p&d shrimp': 'SHRP P&D TF 16-20',
   'coconut milk': 'COCONUT MILK REGULAR - 400ML',
 };
 
@@ -728,13 +731,12 @@ async function placeOrder(orderItems) {
     try { parsedResults = JSON.parse(results); } catch(e) { console.log('Results parse err:', e.message); }
     console.log('=== RESULTS ===');
     let okCount = 0, failCount = 0;
-    (results || []).forEach(r => {
+    parsedResults.forEach(r => {
       const status = r.ok ? 'OK' : (r.action === 'skip' ? 'SKIP' : 'FAIL');
       console.log(`${status} | ${r.action} | ${(r.name || '').slice(0,50)} | from=${r.from || ''} to=${r.to !== undefined ? r.to : r.qty} | id=${(r.id || '').slice(0,30)} | err=${(r.err || '').slice(0,80)}`);
       if (r.ok) okCount++; else if (r.action !== 'skip') failCount++;
     });
     console.log(`SUMMARY: ${okCount} succeeded, ${failCount} failed`);
-    parsedResults.forEach(r => console.log(JSON.stringify(r)));
 
     const notFound = Object.entries(targetMap).filter(([k,v])=>!v.found).map(([k])=>k);
     console.log('Not found:', notFound.join(', ')||'none');
