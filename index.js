@@ -55,6 +55,8 @@ const CASE_SIZES = {
   'Frozen James Farm - Frozen Chopped Spinach - 3 lbs': 12,
   // Garbanzo beans — case of 6 #10 cans
   "Chef's Quality - Garbanzo Beans - #10 can": 6,
+  // Shrimp — case of 5
+  'SHRP P&D TF 16-20': 5,
 };
 
 const ITEM_MAP = {
@@ -121,6 +123,11 @@ const ITEM_MAP = {
   'water': 'Evian - Natural Spring Water, 24 Ct, 500 mL',
   'sprite': 'Sprite Bottles, 16.9 fl oz, 4 Pack',
   'diet coke': 'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
+  'diet coca-cola': 'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
+  'diet coca cola': 'Diet Coke Bottles, 16.9 fl oz, 24 Pack',
+  'coke': 'Coca-Cola Bottles, 16.9 fl oz, 24 Pack',
+  'coca-cola': 'Coca-Cola Bottles, 16.9 fl oz, 24 Pack',
+  'coca cola': 'Coca-Cola Bottles, 16.9 fl oz, 24 Pack',
   'pan spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
   'spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
   'cooking spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
@@ -134,6 +141,8 @@ const ITEM_MAP = {
   'spinach': 'Cleaned Spinach - 2.5 lbs',
   'fancy shredded cheese': 'Fancy Shredded Cheddar Jack Cheese',
   'fancy cheese': 'Fancy Shredded Cheddar Jack Cheese',
+  'cheese blend': 'Fancy Shredded Cheddar Jack Cheese',
+  'shrimp': 'SHRP P&D TF 16-20',
   'coconut milk': 'COCONUT MILK REGULAR - 400ML',
 };
 
