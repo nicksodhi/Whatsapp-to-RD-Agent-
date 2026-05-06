@@ -41,6 +41,16 @@ const CASE_SIZES = {
   "Chef's Quality - All Purpose Pan Spray - 17 oz": 6,
   // Shredded cheese always by case (4 bags)
   'James Farm - Shredded Cheddar Jack Cheese - 5 lbs': 4,
+  // Fancy shredded cheddar jack — case of 4
+  'Fancy Shredded Cheddar Jack Cheese': 4,
+  // White vinegar — case of 4 gallons
+  'White Vinegar - gallon': 4,
+  // Egg yellow color — case of 4 gallons
+  'Egg Yellow Food Coloring - gallon': 4,
+  // Cleaned spinach — case of 4 bags
+  'Cleaned Spinach - 2.5 lbs': 4,
+  // Coconut milk — case of 24 cans
+  'COCONUT MILK REGULAR - 400ML': 24,
 };
 
 const ITEM_MAP = {
@@ -112,6 +122,15 @@ const ITEM_MAP = {
   'cooking spray': "Chef's Quality - All Purpose Pan Spray - 17 oz",
   'serrano peppers': 'Serrano Peppers',
   'serrano': 'Serrano Peppers',
+  'white vinegar': 'White Vinegar - gallon',
+  'vinegar': 'White Vinegar - gallon',
+  'egg yellow': 'Egg Yellow Food Coloring - gallon',
+  'yellow food color': 'Egg Yellow Food Coloring - gallon',
+  'cleaned spinach': 'Cleaned Spinach - 2.5 lbs',
+  'spinach': 'Cleaned Spinach - 2.5 lbs',
+  'fancy shredded cheese': 'Fancy Shredded Cheddar Jack Cheese',
+  'fancy cheese': 'Fancy Shredded Cheddar Jack Cheese',
+  'coconut milk': 'COCONUT MILK REGULAR - 400ML',
 };
 
 async function parseOrder(msg) {
